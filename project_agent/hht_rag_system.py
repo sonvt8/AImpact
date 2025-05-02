@@ -1,26 +1,94 @@
 import os
+import sys
 import tempfile
 import streamlit as st
 import chromadb
 from chromadb.config import Settings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.utils.validation import check_is_fitted
+from sentence_transformers import SentenceTransformer
 from typing import List
-import joblib
+import pdfplumber
+import shutil
+from datetime import datetime
+from functools import lru_cache
+import hashlib
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
+from langchain_community.chat_message_histories import SQLChatMessageHistory
+from cryptography.fernet import Fernet
+from fpdf import FPDF
+import requests
+import warnings
+import torch
 
-# === 1. Kiểm tra cơ sở dữ liệu trong thư mục ChromaDB và vectorizer ===
-def check_existing_data(persist_directory: str = "./chroma_db", vectorizer_path: str = "./data/tfidf_vectorizer.pkl"):
-    # Kiểm tra cả thư mục ChromaDB và file vectorizer trong thư mục data
-    return (os.path.exists(persist_directory) and len(os.listdir(persist_directory)) > 0 and 
-            os.path.exists(vectorizer_path))
+warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 
-# === 2. Xử lý PDF và chia nhỏ văn bản ===
+if sys.version_info >= (3, 13):
+    st.error("Python 3.13 không được hỗ trợ. Vui lòng sử dụng Python 3.11 hoặc 3.12.")
+    st.stop()
+
+if torch.__version__ < "2.3.1":
+    st.error(f"Phiên bản torch ({torch.__version__}) không đủ mới. Vui lòng cài torch>=2.3.1.")
+    st.stop()
+
+def check_ollama():
+    try:
+        response = requests.get("http://localhost:11434", timeout=5)
+        return response.status_code == 200
+    except:
+        return False
+
+DATA_DIR = "data"
+HISTORY_DIR = "history"
+DOCUMENTS_DIR = "Documents"
+CHROMA_DB_PATH = os.path.join(DATA_DIR, "chroma_db")
+ENCRYPTION_KEY_PATH = os.path.join(DATA_DIR, "encryption_key.key")
+HISTORY_DB_PATH = os.path.join(HISTORY_DIR, "query_history.db")
+MODEL_PATH = "./models/all-MiniLM-L6-v2"
+
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(HISTORY_DIR, exist_ok=True)
+os.makedirs(DOCUMENTS_DIR, exist_ok=True)
+
+def display_message(message, message_type="error"):
+    if "message_placeholder" not in st.session_state:
+        st.session_state.message_placeholder = st.empty()
+
+    # Chỉ hiển thị thông báo nếu chưa được hiển thị trước đó
+    if "last_message" not in st.session_state or st.session_state.last_message != message:
+        st.session_state.last_message = message
+        message_id = f"message_{hashlib.md5(message.encode()).hexdigest()}"
+
+        color = {
+            "error": "#ff4b4b",
+            "warning": "#ffcc00",
+            "info": "#28a745"
+        }.get(message_type, "#ff4b4b")
+
+        html_message = f"""
+        <div id="{message_id}" style="padding: 10px; margin-bottom: 10px; border-radius: 5px; color: white; 
+        background-color: {color};">
+            {message}
+        </div>
+        <script>
+            setTimeout(function() {{
+                var elem = document.getElementById("{message_id}");
+                if (elem) {{
+                    elem.parentNode.removeChild(elem);
+                }}
+            }}, 5000);
+        </script>
+        """
+
+        st.session_state.message_placeholder.markdown(html_message, unsafe_allow_html=True)
+
+def check_existing_data(persist_directory: str = CHROMA_DB_PATH):
+    return os.path.exists(persist_directory) and len(os.listdir(persist_directory)) > 0
+
 class DocumentProcessor:
-    def __init__(self, chunk_size: int = 800, chunk_overlap: int = 200):
+    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 100):
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -28,81 +96,115 @@ class DocumentProcessor:
         )
 
     def load_and_split(self, pdf_file) -> List[str]:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(pdf_file.read())
-            tmp_file_path = tmp_file.name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        saved_filename = f"{timestamp}_{pdf_file.name}"
+        saved_filepath = os.path.join(DOCUMENTS_DIR, saved_filename)
 
-        loader = PyPDFLoader(tmp_file_path)
-        docs = loader.load()
-        splits = self.text_splitter.split_documents(docs)
+        with open(saved_filepath, "wb") as f:
+            f.write(pdf_file.read())
+
+        chunks = []
+        try:
+            with pdfplumber.open(saved_filepath) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        chunks.append(text.strip())
+                    tables = page.extract_tables()
+                    for table in tables:
+                        table_text = "\n".join([",".join(str(cell) if cell is not None else "" for cell in row) for row in table])
+                        if table_text.strip():
+                            chunks.append(table_text.strip())
+        except Exception as e:
+            display_message(f"Lỗi xử lý PDF: {str(e)}", "error")
+            return []
+
+        splits = self.text_splitter.create_documents(chunks)
         return [chunk.page_content.strip() for chunk in splits if chunk.page_content.strip()]
 
-# === 3. TF-IDF embedding function ===
-class TFIDFEmbedding:
-    def __init__(self, vectorizer_path: str = "./data/tfidf_vectorizer.pkl"):
-        self.vectorizer_path = vectorizer_path
-        self.vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=1)
-        
-        # Kiểm tra thư mục data, nếu không có thì tạo thư mục
-        os.makedirs(os.path.dirname(self.vectorizer_path), exist_ok=True)
-
-        # Nếu mô hình đã được lưu, tải lại
-        if os.path.exists(self.vectorizer_path):
-            self.vectorizer = joblib.load(self.vectorizer_path)
-
-    def is_fitted(self) -> bool:
+class SentenceEmbedding:
+    def __init__(self, model_path: str = MODEL_PATH):
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        if not os.path.exists(model_path):
+            display_message(f"Mô hình 'all-MiniLM-L6-v2' không tìm thấy tại {model_path}.", "error")
+            display_message("Vui lòng chạy: from sentence_transformers import SentenceTransformer; model = SentenceTransformer('all-MiniLM-L6-v2'); model.save('./models/all-MiniLM-L6-v2')", "info")
+            st.stop()
         try:
-            check_is_fitted(self.vectorizer)
-            return True
-        except:
-            return False
-
-    def fit(self, texts: List[str]):
-        if texts and any(t.strip() for t in texts):
-            self.vectorizer.fit(texts)
-            joblib.dump(self.vectorizer, self.vectorizer_path)
-        else:
-            raise ValueError("Cannot fit TfidfVectorizer with empty or invalid texts")
+            self.model = SentenceTransformer(model_path)
+        except Exception as e:
+            display_message(f"Lỗi tải mô hình sentence-transformers: {str(e)}", "error")
+            st.stop()
 
     def __call__(self, texts: List[str]) -> List[List[float]]:
-        if not self.is_fitted():
-            raise ValueError("TfidfVectorizer is not fitted. Please process a document first.")
-        return self.vectorizer.transform(texts).toarray().tolist()
+        try:
+            return self.model.encode(texts, show_progress_bar=False).tolist()
+        except Exception as e:
+            display_message(f"Lỗi tạo embedding: {str(e)}", "error")
+            return []
 
-# === 4. Quản lý ChromaDB ===
 class ChromaDBManager:
-    def __init__(self, persist_directory: str = "./chroma_db"):
+    def __init__(self, persist_directory: str = CHROMA_DB_PATH):
+        self.key_path = ENCRYPTION_KEY_PATH
+        os.makedirs(os.path.dirname(self.key_path), exist_ok=True)
+        if os.path.exists(self.key_path):
+            with open(self.key_path, "rb") as f:
+                self.key = f.read()
+        else:
+            self.key = Fernet.generate_key()
+            with open(self.key_path, "wb") as f:
+                f.write(self.key)
+        self.cipher = Fernet(self.key)
         os.makedirs(persist_directory, exist_ok=True)
         self.client = chromadb.PersistentClient(path=persist_directory)
         self.collection = self.client.get_or_create_collection(name="viettel_docs")
 
-    def add(self, texts: List[str], embeddings: List[List[float]]):
-        ids = [f"doc_{i}" for i in range(len(texts))]
-        metas = [{"source": f"Đoạn {i+1}"} for i in range(len(texts))]
+    def add(self, texts: List[str], embeddings: List[List[float]], filename: str):
+        encrypted_texts = [self.cipher.encrypt(text.encode()).decode() for text in texts]
+        ids = [f"doc_{hashlib.md5((filename + str(i)).encode()).hexdigest()}" for i in range(len(texts))]
+        metas = [{"source": f"Đoạn {i+1}", "filename": filename, "upload_date": datetime.now().isoformat()} for i in range(len(texts))]
         self.collection.add(
             ids=ids,
-            documents=texts,
+            documents=encrypted_texts,
             metadatas=metas,
             embeddings=embeddings,
         )
 
-    def query(self, query_embedding: List[float], top_k: int = 5):
+    def query(self, query_embedding: List[float], top_k: int = 3):
         res = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k,
             include=["documents", "metadatas", "distances"]
         )
+        res["documents"] = [[self.cipher.decrypt(doc.encode()).decode() for doc in docs] for docs in res["documents"]]
         return res
 
-# === 5. Tạo câu trả lời cuối cùng từ mô hình LLM và kết hợp trích dẫn ===
 class AnswerGenerator:
-    def __init__(self, model_name: str = "gpt-4o-mini"):
-        self.model = ChatOpenAI(model=model_name)
+    def __init__(self, model_type: str, role: str = "Expert"):
+        self.model_type = model_type
+        self.role = role
+        if model_type == "openai":
+            try:
+                self.model = ChatOpenAI(model="gpt-4o-mini")
+            except Exception as e:
+                display_message(f"Lỗi kết nối OpenAI: {str(e)}. Vui lòng kiểm tra API key hoặc kết nối internet.", "error")
+                st.stop()
+        elif model_type == "ollama":
+            if not check_ollama():
+                display_message("Ollama server không hoạt động. Vui lòng chạy 'ollama run llama3.2'.", "error")
+                st.stop()
+            self.model = ChatOllama(
+                base_url="http://localhost:11434",
+                model="llama3.2",
+                temperature=0.3,
+                max_tokens=1000
+            )
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
 
     def generate_answer(self, question: str, context: str, citations: str) -> str:
         prompt = PromptTemplate(
-            input_variables=["question", "context", "citations"],
-            template="""Given the following question, context, and citations, please provide a detailed and accurate answer:
+            input_variables=["question", "context", "citations", "role"],
+            template="""You are an expert in telecommunications and Data Center operations, answering at a {role} level. Given the following question, context, and citations, provide a concise, accurate, and technical answer using domain-specific terminology:
 
             Question: {question}
 
@@ -112,88 +214,150 @@ class AnswerGenerator:
 
             Answer:"""
         )
-        formatted_prompt = prompt.format(question=question, context=context, citations=citations)
-        response = self.model.invoke(formatted_prompt)
-        return response.content.strip()
+        try:
+            formatted_prompt = prompt.format(question=question, context=context, citations=citations, role=self.role)
+            response = self.model.invoke(formatted_prompt)
+            return response.content.strip()
+        except Exception as e:
+            display_message(f"Error generating answer: {str(e)}", "error")
+            return ""
 
-# === 6. Streamlit UI ===
+def get_session_history(session_id: str):
+    return SQLChatMessageHistory(session_id=session_id, connection=f"sqlite:///{HISTORY_DB_PATH}")
+
 def main():
     st.set_page_config(page_title="RAG Điện Viễn Thông (Nội bộ)", layout="wide")
+
+    if "message_placeholder" not in st.session_state:
+        st.session_state.message_placeholder = st.empty()
+
     st.title("📄 Hệ thống truy vấn tài liệu thông minh")
 
-    # Khởi tạo session state
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if not st.session_state.authenticated:
+        password = st.text_input("Nhập mật khẩu:", type="password", value="")
+        if st.button("Xác thực"):
+            if password == "T0mmy":
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                display_message("Mật khẩu không đúng. Vui lòng thử lại.", "error")
+        return
+
     if "processor" not in st.session_state:
         st.session_state.processor = None
-    if "tfidf" not in st.session_state:
-        st.session_state.tfidf = None
+    if "embedder" not in st.session_state:
+        st.session_state.embedder = None
     if "chroma" not in st.session_state:
         st.session_state.chroma = None
+    if "query_history" not in st.session_state:
+        st.session_state.query_history = get_session_history("user_default")
+    if "has_db_notified" not in st.session_state:
+        st.session_state.has_db_notified = False
 
-    # Kiểm tra nếu cơ sở dữ liệu và vectorizer đã tồn tại
+    st.sidebar.header("Cấu hình")
+    llm_type = st.sidebar.radio(
+        "Chọn mô hình LLM:",
+        ["ollama", "openai"],
+        format_func=lambda x: "Ollama Llama3.2 (Offline)" if x == "ollama" else "OpenAI GPT-4o-mini (Online)",
+    )
+    role = st.sidebar.radio("Mức độ chi tiết:", ["Beginner", "Expert", "PhD"])
+
     has_db = check_existing_data()
-
     if has_db:
-        st.sidebar.info("CSDL đã có dữ liệu. Bạn có thể bắt đầu truy vấn câu hỏi ngay.")
-        # Khởi tạo ChromaDB và TFIDFEmbedding từ dữ liệu hiện có
+        st.sidebar.info("CSDL đã có dữ liệu. Bạn có thể bắt đầu truy vấn.")
         if st.session_state.chroma is None:
-            st.session_state.chroma = ChromaDBManager(persist_directory="./chroma_db")
-        if st.session_state.tfidf is None:
-            st.session_state.tfidf = TFIDFEmbedding(vectorizer_path="./data/tfidf_vectorizer.pkl")
+            st.session_state.chroma = ChromaDBManager(persist_directory=CHROMA_DB_PATH)
+        if st.session_state.embedder is None:
+            st.session_state.embedder = SentenceEmbedding(model_path=MODEL_PATH)
+        st.session_state.has_db_notified = False
     else:
-        st.sidebar.warning("Không có dữ liệu trong CSDL hoặc mô hình TF-IDF chưa được tạo. Vui lòng tải lên tài liệu PDF để xử lý.")
-        pdf_file = st.file_uploader("1. Tải lên file Document_hht.pdf", type="pdf")
-        if pdf_file:
-            with st.spinner("Đang trích xuất và chia nhỏ văn bản…"):
-                # Xử lý tài liệu
+        if not st.session_state.has_db_notified:
+            display_message("Chưa có dữ liệu. Vui lòng tải lên tài liệu PDF.", "warning")
+            st.session_state.has_db_notified = True
+
+    st.sidebar.subheader("Quản lý tài liệu")
+    pdf_file = st.sidebar.file_uploader("Tải lên file PDF", type="pdf")
+    if pdf_file:
+        with st.spinner("Đang xử lý tài liệu…"):
+            try:
                 proc = DocumentProcessor()
                 chunks = proc.load_and_split(pdf_file)
                 if not chunks:
-                    st.error("Không thể trích xuất văn bản từ PDF. Vui lòng kiểm tra file.")
+                    display_message("Không thể trích xuất văn bản từ PDF.", "error")
+                    return
+                embedder = SentenceEmbedding(model_path=MODEL_PATH)
+                embeddings = embedder(chunks)
+                chroma = ChromaDBManager(persist_directory=CHROMA_DB_PATH)
+                chroma.add(chunks, embeddings, filename=pdf_file.name)
+                st.session_state.processor = proc
+                st.session_state.embedder = embedder
+                st.session_state.chroma = chroma
+                display_message("Đã xử lý và lưu tài liệu thành công!", "info")
+                st.session_state.has_db_notified = False
+            except Exception as e:
+                display_message(f"Lỗi xử lý tài liệu: {str(e)}", "error")
+
+    if has_db and st.sidebar.button("Xóa tất cả tài liệu"):
+        try:
+            st.session_state.chroma.client.delete_collection("viettel_docs")
+            st.session_state.chroma = None
+            st.session_state.embedder = None
+            st.session_state.processor = None
+            display_message("Đã xóa tất cả tài liệu!", "info")
+            st.session_state.has_db_notified = False
+        except Exception as e:
+            display_message(f"Lỗi xóa tài liệu: {str(e)}", "error")
+
+    query = st.text_input("Nhập câu hỏi (tiếng Việt):")
+    if query:
+        if st.session_state.chroma is None or st.session_state.embedder is None:
+            display_message("Chưa có dữ liệu. Vui lòng tải lên tài liệu PDF.", "warning")
+            return
+        with st.spinner("Đang tạo câu trả lời…"):
+            try:
+                @lru_cache(maxsize=100)
+                def cached_query(query: str, top_k: int) -> tuple:
+                    emb = st.session_state.embedder([query])[0]
+                    res = st.session_state.chroma.query(emb, top_k)
+                    return res["documents"][0], res["metadatas"][0], res["distances"][0]
+
+                docs, metas, dists = cached_query(query, top_k=3)
+                context = " ".join(docs)
+                citations = "\n".join([f"**{meta['source']}** ({meta['filename']}, score={dist:.4f}):\n> {doc}" for meta, doc, dist in zip(metas, docs, dists)])
+
+                answer_generator = AnswerGenerator(model_type=llm_type, role=role)
+                final_answer = answer_generator.generate_answer(query, context, citations)
+
+                if final_answer.startswith("Error generating answer"):
+                    display_message(final_answer, "error")
                     return
 
-                # Khởi tạo và fit TFIDF
-                tfidf = TFIDFEmbedding(vectorizer_path="./data/tfidf_vectorizer.pkl")
-                tfidf.fit(chunks)
-                embeddings = tfidf(chunks)
+                st.session_state.query_history.add_user_message(query)
+                st.session_state.query_history.add_ai_message(final_answer)
 
-                # Lưu vào ChromaDB
-                chroma = ChromaDBManager(persist_directory="./chroma_db")
-                chroma.add(chunks, embeddings)
+                st.markdown("### Câu trả lời cuối cùng:")
+                st.write(final_answer)
 
-                # Lưu vào session
-                st.session_state.processor = proc
-                st.session_state.tfidf = tfidf
-                st.session_state.chroma = chroma
-            st.success("✅ Đã xử lý xong tài liệu và lưu vào ChromaDB!")
+                with st.expander("📚 Xem trích dẫn nguồn"):
+                    st.markdown(citations, unsafe_allow_html=True)
 
-    # --- Nhập câu hỏi và truy vấn ---
-    query = st.text_input("2. Nhập câu hỏi (tiếng Việt):")
-    if query:
-        if st.session_state.chroma is None or st.session_state.tfidf is None:
-            st.error("Chưa có dữ liệu hoặc mô hình TF-IDF. Vui lòng tải lên tài liệu PDF trước.")
-            return
-        try:
-            with st.spinner("Đang truy vấn và tạo câu trả lời…"):
-                emb = st.session_state.tfidf([query])[0]
-                res = st.session_state.chroma.query(emb, top_k=3)
-                docs = res["documents"][0]
-                metas = res["metadatas"][0]
-                dists = res["distances"][0]
-                
-                context = " ".join(docs)
-                citations = "\n".join([f"**{meta['source']}** (score={dist:.4f}):\n> {doc}" for meta, doc, dist in zip(metas, docs, dists)])
+                if st.button("Xuất câu trả lời"):
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.set_font("Arial", size=12)
+                    pdf.multi_cell(0, 10, f"Câu hỏi: {query}\n\nCâu trả lời:\n{final_answer}\n\nTrích dẫn:\n{citations}")
+                    pdf.output("answer.pdf")
+                    with open("answer.pdf", "rb") as f:
+                        st.download_button("Tải PDF", f, file_name="answer.pdf")
+            except Exception as e:
+                display_message(f"Lỗi truy vấn: {str(e)}", "error")
 
-                answer_generator = AnswerGenerator()
-                final_answer = answer_generator.generate_answer(query, context, citations)
-            
-            st.markdown("### Câu trả lời cuối cùng:")
-            st.write(final_answer)
-
-            with st.expander("📚 Xem các trích dẫn nguồn"):
-                for citation in citations.split("\n"):
-                    st.markdown(citation)
-        except ValueError as e:
-            st.error(f"Lỗi: {str(e)}")
+    with st.expander("📜 Lịch sử truy vấn"):
+        for msg in st.session_state.query_history.messages:
+            role = "Người dùng" if msg.type == "human" else "Trợ lý"
+            st.write(f"**{role}**: {msg.content}")
 
 if __name__ == "__main__":
     main()
