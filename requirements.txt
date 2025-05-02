@@ -27,3 +27,6 @@ openai
 SQLAlchemy
 langgraph[checkpoint]
 langgraph-checkpoint-sqlite
+
+# for project agent
+scikit-learn
