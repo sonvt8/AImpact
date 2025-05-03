@@ -1,6 +1,5 @@
 import os
 import sys
-import tempfile
 import streamlit as st
 import chromadb
 from chromadb.config import Settings
@@ -18,10 +17,15 @@ from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langchain_community.chat_message_histories import SQLChatMessageHistory
 from cryptography.fernet import Fernet
-from fpdf import FPDF
 import requests
 import warnings
 import torch
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase import pdfmetrics
+import io
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 
@@ -56,7 +60,6 @@ def display_message(message, message_type="error"):
     if "message_placeholder" not in st.session_state:
         st.session_state.message_placeholder = st.empty()
 
-    # Chỉ hiển thị thông báo nếu chưa được hiển thị trước đó
     if "last_message" not in st.session_state or st.session_state.last_message != message:
         st.session_state.last_message = message
         message_id = f"message_{hashlib.md5(message.encode()).hexdigest()}"
@@ -96,12 +99,12 @@ class DocumentProcessor:
         )
 
     def load_and_split(self, pdf_file) -> List[str]:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        saved_filename = f"{timestamp}_{pdf_file.name}"
+        saved_filename = pdf_file.name
         saved_filepath = os.path.join(DOCUMENTS_DIR, saved_filename)
 
-        with open(saved_filepath, "wb") as f:
-            f.write(pdf_file.read())
+        if not os.path.exists(saved_filepath):
+            with open(saved_filepath, "wb") as f:
+                f.write(pdf_file.read())
 
         chunks = []
         try:
@@ -196,7 +199,7 @@ class AnswerGenerator:
                 base_url="http://localhost:11434",
                 model="llama3.2",
                 temperature=0.3,
-                max_tokens=1000
+                max_tokens=2000
             )
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
@@ -224,6 +227,22 @@ class AnswerGenerator:
 
 def get_session_history(session_id: str):
     return SQLChatMessageHistory(session_id=session_id, connection=f"sqlite:///{HISTORY_DB_PATH}")
+
+def wrap_text(text, width, canvas_obj, font_name="Helvetica", font_size=12):
+    """Hàm để bọc văn bản trong PDF nếu vượt quá chiều rộng."""
+    lines = []
+    current_line = ""
+    canvas_obj.setFont(font_name, font_size)
+    for word in text.split():
+        test_line = current_line + word + " "
+        if canvas_obj.stringWidth(test_line, font_name, font_size) <= width:
+            current_line = test_line
+        else:
+            lines.append(current_line.strip())
+            current_line = word + " "
+    if current_line:
+        lines.append(current_line.strip())
+    return lines
 
 def main():
     st.set_page_config(page_title="RAG Điện Viễn Thông (Nội bộ)", layout="wide")
@@ -266,7 +285,8 @@ def main():
 
     has_db = check_existing_data()
     if has_db:
-        st.sidebar.info("CSDL đã có dữ liệu. Bạn có thể bắt đầu truy vấn.")
+        display_message("CSDL đã có dữ liệu. Bạn có thể bắt đầu truy vấn.", "info")
+        # st.sidebar.info("CSDL đã có dữ liệu. Bạn có thể bắt đầu truy vấn.")
         if st.session_state.chroma is None:
             st.session_state.chroma = ChromaDBManager(persist_directory=CHROMA_DB_PATH)
         if st.session_state.embedder is None:
@@ -305,6 +325,10 @@ def main():
             st.session_state.chroma = None
             st.session_state.embedder = None
             st.session_state.processor = None
+            for file in os.listdir(DOCUMENTS_DIR):
+                file_path = os.path.join(DOCUMENTS_DIR, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
             display_message("Đã xóa tất cả tài liệu!", "info")
             st.session_state.has_db_notified = False
         except Exception as e:
@@ -344,20 +368,129 @@ def main():
                     st.markdown(citations, unsafe_allow_html=True)
 
                 if st.button("Xuất câu trả lời"):
-                    pdf = FPDF()
-                    pdf.add_page()
-                    pdf.set_font("Arial", size=12)
-                    pdf.multi_cell(0, 10, f"Câu hỏi: {query}\n\nCâu trả lời:\n{final_answer}\n\nTrích dẫn:\n{citations}")
-                    pdf.output("answer.pdf")
-                    with open("answer.pdf", "rb") as f:
-                        st.download_button("Tải PDF", f, file_name="answer.pdf")
+                    buffer = io.BytesIO()
+                    c = canvas.Canvas(buffer, pagesize=letter)
+                    width, height = letter
+
+                    # Kiểm tra font DejaVuSans
+                    font_name = "Helvetica"  # Font mặc định nếu không tìm thấy DejaVuSans
+                    font_available = os.path.exists("DejaVuSans.ttf")
+                    if font_available:
+                        try:
+                            pdfmetrics.registerFont(TTFont("DejaVuSans", "DejaVuSans.ttf"))
+                            font_name = "DejaVuSans"
+                        except Exception as e:
+                            display_message(f"Lỗi tải font DejaVuSans: {str(e)}. Sẽ sử dụng font mặc định (Helvetica). Tiếng Việt có thể không hiển thị đúng.", "warning")
+                    else:
+                        display_message(
+                            "Không tìm thấy file font DejaVuSans.ttf. Sẽ sử dụng font mặc định (Helvetica). "
+                            "Tiếng Việt có thể không hiển thị đúng. Vui lòng tải font DejaVuSans.ttf và đặt vào thư mục dự án.",
+                            "warning"
+                        )
+
+                    y_position = height - inch  # Vị trí bắt đầu từ trên xuống
+
+                    # Tiêu đề: Câu hỏi
+                    c.setFont(font_name, 16)
+                    c.drawString(inch, y_position, "Câu hỏi:")
+                    y_position -= 0.5 * inch
+
+                    # Nội dung câu hỏi
+                    c.setFont(font_name, 12)
+                    query_lines = wrap_text(query, width - 2 * inch, c, font_name, 12)
+                    for line in query_lines:
+                        if y_position < inch:
+                            c.showPage()
+                            c.setFont(font_name, 12)
+                            y_position = height - inch
+                        c.drawString(inch, y_position, line)
+                        y_position -= 0.3 * inch
+
+                    # Tiêu đề: Câu trả lời
+                    y_position -= 0.5 * inch
+                    if y_position < inch:
+                        c.showPage()
+                        c.setFont(font_name, 16)
+                        y_position = height - inch
+                    c.setFont(font_name, 16)
+                    c.drawString(inch, y_position, "Câu trả lời:")
+                    y_position -= 0.5 * inch
+
+                    # Nội dung câu trả lời
+                    c.setFont(font_name, 12)
+                    answer_lines = wrap_text(final_answer, width - 2 * inch, c, font_name, 12)
+                    for line in answer_lines:
+                        if y_position < inch:
+                            c.showPage()
+                            c.setFont(font_name, 12)
+                            y_position = height - inch
+                        c.drawString(inch, y_position, line)
+                        y_position -= 0.3 * inch
+
+                    # Tiêu đề: Trích dẫn
+                    y_position -= 0.5 * inch
+                    if y_position < inch:
+                        c.showPage()
+                        c.setFont(font_name, 16)
+                        y_position = height - inch
+                    c.setFont(font_name, 16)
+                    c.drawString(inch, y_position, "Trích dẫn:")
+                    y_position -= 0.5 * inch
+
+                    # Nội dung trích dẫn
+                    c.setFont(font_name, 12)
+                    citations_lines = wrap_text(citations, width - 2 * inch, c, font_name, 12)
+                    for line in citations_lines:
+                        if y_position < inch:
+                            c.showPage()
+                            c.setFont(font_name, 12)
+                            y_position = height - inch
+                        c.drawString(inch, y_position, line)
+                        y_position -= 0.3 * inch
+
+                    c.save()
+                    buffer.seek(0)
+                    st.download_button("Tải PDF", buffer, file_name="answer.pdf", mime="application/pdf")
             except Exception as e:
                 display_message(f"Lỗi truy vấn: {str(e)}", "error")
 
     with st.expander("📜 Lịch sử truy vấn"):
-        for msg in st.session_state.query_history.messages:
-            role = "Người dùng" if msg.type == "human" else "Trợ lý"
-            st.write(f"**{role}**: {msg.content}")
+        messages = st.session_state.query_history.messages
+        for i in range(0, len(messages), 2):
+            if i + 1 < len(messages):
+                user_msg = messages[i]
+                ai_msg = messages[i + 1]
+                user_content = user_msg.content.replace("\n", "<br>")
+                ai_content = ai_msg.content.replace("\n", "<br>")
+                st.markdown(
+                    """
+                    <div style="background-color: #ffffff; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                        👤 <strong>Người dùng:</strong> {user_content}
+                    </div>
+                    """.format(user_content=user_content),
+                    unsafe_allow_html=True
+                )
+                st.markdown(
+                    """
+                    <div style="background-color: #d3d3d3; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                        🤖 <strong>Trợ lý:</strong> {ai_content}
+                    </div>
+                    """.format(ai_content=ai_content),
+                    unsafe_allow_html=True
+                )
+                if i + 2 < len(messages):
+                    st.markdown("---")
+            else:
+                user_msg = messages[i]
+                user_content = user_msg.content.replace("\n", "<br>")
+                st.markdown(
+                    """
+                    <div style="background-color: #ffffff; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                        👤 <strong>Người dùng:</strong> {user_content}
+                    </div>
+                    """.format(user_content=user_content),
+                    unsafe_allow_html=True
+                )
 
 if __name__ == "__main__":
     main()
