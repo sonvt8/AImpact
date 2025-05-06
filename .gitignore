@@ -173,3 +173,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# My App
+data/
+Documents/
+history/
+models/
+rag_system.log

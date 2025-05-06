@@ -11,6 +11,7 @@ cryptography==43.0.0
 fpdf==1.7.2
 watchdog==5.0.2
 reportlab==4.2.2
+pytesseract==0.3.13
 # torch for macOS (Apple Silicon) and Windows
 torch==2.3.1; sys_platform == 'darwin' and platform_machine == 'arm64'
 torch==2.3.1; sys_platform != 'darwin' or platform_machine != 'arm64' --extra-index-url https://download.pytorch.org/whl/cpu
