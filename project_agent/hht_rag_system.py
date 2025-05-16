@@ -4,7 +4,11 @@ import asyncio
 import streamlit as st
 import chromadb
 from chromadb.config import Settings
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import (
+    TextLoader, PyPDFLoader, CSVLoader,  # Removed UnstructuredMarkdownLoader
+    Docx2txtLoader, UnstructuredExcelLoader
+)
+from langchain_community.document_loaders.merge import MergedDataLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from typing import List, Tuple
@@ -37,6 +41,7 @@ from retry import retry
 from dotenv import load_dotenv
 import aiohttp
 from sqlalchemy import create_engine, text
+from langchain_core.callbacks import StreamingStdOutCallbackHandler
 
 # Load environment variables
 load_dotenv()
@@ -53,6 +58,7 @@ PASSWORD = os.getenv("APP_PASSWORD", "secure_default_password")
 SIMILARITY_THRESHOLD_DEFAULT = float(os.getenv("SIMILARITY_THRESHOLD", 0.6))
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 500))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 150))
+SUPPORTED_FILE_TYPES = [".txt", ".pdf", ".docx", ".xlsx", ".csv"]  # Removed ".md"
 
 # Load telecom keywords from file
 TELECOM_KEYWORDS_FILE = os.getenv("TELECOM_KEYWORDS_FILE", "telecom_keywords.txt")
@@ -163,17 +169,49 @@ class DocumentProcessor:
             separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
         )
 
-    async def load_and_split(self, pdf_file) -> Tuple[List[str], List[int]]:
-        saved_filename = pdf_file.name
-        saved_filepath = os.path.join(DOCUMENTS_DIR, saved_filename)
+    async def load_and_split(self, file, filename: str) -> Tuple[List[str], List[int]]:
+        saved_filepath = os.path.join(DOCUMENTS_DIR, filename)
         if not os.path.exists(saved_filepath):
             with open(saved_filepath, "wb") as f:
-                f.write(pdf_file.read())
+                f.write(file.read())
+        
+        loaders = []
+        ext = os.path.splitext(filename)[1].lower()
+        try:
+            if ext == ".txt":
+                loaders.append(TextLoader(saved_filepath))
+            elif ext == ".pdf":
+                return await self._process_pdf(saved_filepath)
+            elif ext == ".docx":
+                loaders.append(Docx2txtLoader(saved_filepath))
+            elif ext == ".xlsx":
+                loaders.append(UnstructuredExcelLoader(saved_filepath))
+            elif ext == ".csv":
+                loaders.append(CSVLoader(saved_filepath))
+            else:
+                logger.error(f"Unsupported file type: {ext}")
+                return [], []
+        except Exception as e:
+            logger.error(f"Error loading {filename}: {str(e)}")
+            return [], []
+
+        if loaders:
+            merged_loader = MergedDataLoader(loaders=loaders)
+            docs = merged_loader.load()
+            full_text = " ".join(doc.page_content for doc in docs)
+            full_text = preprocess_text(full_text)
+            splits = self.text_splitter.create_documents([full_text])
+            chunks = [chunk.page_content.strip() for chunk in splits if chunk.page_content.strip()]
+            page_numbers = [1] * len(chunks)  # Default page number for non-PDF files
+            return chunks, page_numbers
+        return [], []
+
+    async def _process_pdf(self, filepath: str) -> Tuple[List[str], List[int]]:
         full_text = ""
         page_boundaries = []
         current_pos = 0
         try:
-            with pdfplumber.open(saved_filepath) as pdf:
+            with pdfplumber.open(filepath) as pdf:
                 for page_num, page in enumerate(pdf.pages, start=1):
                     text = page.extract_text() or ""
                     if not text.strip():
@@ -181,7 +219,6 @@ class DocumentProcessor:
                         try:
                             image = page.to_image(resolution=300).original.convert("RGB")
                             text = pytesseract.image_to_string(image, lang='vie').strip()
-                            logger.info(f"OCR success for page {page_num}: {text[:100]}...")
                         except Exception as e:
                             logger.error(f"OCR error for page {page_num}: {str(e)}")
                             text = ""
@@ -210,7 +247,7 @@ class DocumentProcessor:
             if not chunk_text:
                 continue
             chunk_start = full_text.index(chunk_text)
-            chunk_page = page_boundaries[0][1]
+            chunk_page = page_boundaries[0][1] if page_boundaries else 1
             for pos, page_num in page_boundaries:
                 if chunk_start >= pos:
                     chunk_page = page_num
@@ -288,7 +325,7 @@ class AnswerGenerator:
         self.model_type = model_type
         if model_type == "openai":
             try:
-                self.model = ChatOpenAI(model="gpt-4o-mini")
+                self.model = ChatOpenAI(model="gpt-4o-mini", streaming=True, callbacks=[StreamingStdOutCallbackHandler()])
             except Exception as e:
                 display_message(f"OpenAI connection error: {str(e)}. Check API key or internet.", "error")
                 st.stop()
@@ -296,9 +333,42 @@ class AnswerGenerator:
             if not await check_ollama():
                 display_message("Ollama server not running. Run 'ollama run llama3.2'.", "error")
                 st.stop()
-            self.model = ChatOllama(base_url="http://localhost:11434", model="llama3.2", temperature=0.3, max_tokens=2000)
+            self.model = ChatOllama(
+                base_url="http://localhost:11434", 
+                model="llama3.2", 
+                temperature=0.3, 
+                max_tokens=2000,
+                streaming=True,
+                callbacks=[StreamingStdOutCallbackHandler()]
+            )
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
+
+    @retry(tries=3, delay=1, backoff=2)
+    async def generate_answer_stream(self, question: str, context: str, citations: str):
+        prompt = PromptTemplate(
+            input_variables=["question", "context", "citations", "role"],
+            template="""Bạn là một chuyên gia trong lĩnh vực viễn thông và vận hành Data Center, trả lời ở mức độ {role}. Dựa trên câu hỏi, ngữ cảnh và trích dẫn sau đây, hãy cung cấp câu trả lời ngắn gọn, chính xác và mang tính kỹ thuật, sử dụng thuật ngữ chuyên ngành viễn thông nếu có:
+
+            Câu hỏi: {question}
+
+            Ngữ cảnh: {context}
+
+            Trích dẫn: {citations}
+
+            Nếu ngữ cảnh hoặc trích dẫn không chứa thông tin liên quan trực tiếp đến câu hỏi, hoặc thông tin không đủ để trả lời chính xác, hãy trả lời rõ ràng: "Không tìm thấy thông tin phù hợp trong tài liệu để trả lời câu hỏi này." Đừng cố gắng suy diễn hoặc trả lời dựa trên thông tin không rõ ràng.
+
+            Nếu có thông tin lặp lại trong ngữ cảnh hoặc trích dẫn, hãy chỉ sử dụng một lần và trình bày câu trả lời mạch lạc.
+
+            Trả lời:"""
+        )
+        try:
+            formatted_prompt = prompt.format(question=question, context=context, citations=citations, role=self.role)
+            async for chunk in self.model.astream(formatted_prompt):
+                yield chunk.content
+        except Exception as e:
+            display_message(f"Answer generation error: {str(e)}", "error")
+            yield ""
 
     @retry(tries=3, delay=1, backoff=2)
     def generate_answer(self, question: str, context: str, citations: str) -> str:
@@ -330,7 +400,6 @@ def get_session_history(conversation_id: str):
     return SQLChatMessageHistory(session_id=conversation_id, connection=f"sqlite:///{HISTORY_DB_PATH}")
 
 def load_conversations():
-    """Tải danh sách các conversation_id từ cơ sở dữ liệu SQLite."""
     try:
         engine = create_engine(f"sqlite:///{HISTORY_DB_PATH}")
         with engine.connect() as connection:
@@ -342,7 +411,6 @@ def load_conversations():
         return []
 
 def check_table_exists():
-    """Kiểm tra xem bảng chat_messages có tồn tại trong cơ sở dữ liệu không."""
     try:
         engine = create_engine(f"sqlite:///{HISTORY_DB_PATH}")
         with engine.connect() as connection:
@@ -430,21 +498,26 @@ def setup_session_state():
     if "chroma" not in st.session_state:
         st.session_state.chroma = ChromaDBManager(persist_directory=CHROMA_DB_PATH)
     if "conversations" not in st.session_state:
-        st.session_state.conversations = {}  # Lưu các conversation: {conversation_id: SQLChatMessageHistory}
+        st.session_state.conversations = {}
     if "conversation_order" not in st.session_state:
-        st.session_state.conversation_order = load_conversations()  # Tải conversation từ DB
+        st.session_state.conversation_order = load_conversations()
     if "current_conversation_id" not in st.session_state:
-        st.session_state.current_conversation_id = None
+        # Initialize a conversation ID if none exists
+        conversation_id = f"conversation_{datetime.now().isoformat()}_{hashlib.md5(str(datetime.now()).encode()).hexdigest()}"
+        st.session_state.conversations[conversation_id] = get_session_history(conversation_id)
+        st.session_state.conversation_order.append(conversation_id)
+        st.session_state.current_conversation_id = conversation_id
+        logger.info(f"Initialized conversation ID: {conversation_id}")
     if "has_db_notified" not in st.session_state:
         st.session_state.has_db_notified = False
     if "confirm_delete" not in st.session_state:
         st.session_state.confirm_delete = False
-    if "clear_input" not in st.session_state:
-        st.session_state.clear_input = False  # Trạng thái để làm trống ô nhập
     if "last_answer" not in st.session_state:
-        st.session_state.last_answer = None  # Lưu câu trả lời cuối cùng
+        st.session_state.last_answer = None
     if "last_citations" not in st.session_state:
-        st.session_state.last_citations = None  # Lưu trích dẫn cuối cùng
+        st.session_state.last_citations = None
+    if "query_input_value" not in st.session_state:
+        st.session_state.query_input_value = ""  # Persist query input across reruns
 
 def handle_authentication():
     if not st.session_state.authenticated:
@@ -452,23 +525,25 @@ def handle_authentication():
         if st.button("Xác thực"):
             if password == PASSWORD:
                 st.session_state.authenticated = True
+                logger.info("Authentication successful, triggering rerun.")
                 st.rerun()
             else:
                 display_message("Mật khẩu không đúng. Vui lòng thử lại.", "error")
         return False
     return True
 
-async def process_pdf(pdf_file):
+async def process_files(uploaded_files):
     try:
-        chunks, page_numbers = await st.session_state.processor.load_and_split(pdf_file)
-        if not chunks:
-            display_message("Không thể trích xuất văn bản từ PDF.", "error")
-            return
-        total_length = sum(len(chunk) for chunk in chunks)
-        if total_length > 1000000:
-            display_message("Nội dung tài liệu có thể bị cắt bớt do kích thước lớn.", "warning")
-        embeddings = st.session_state.embedder(chunks)
-        st.session_state.chroma.add(chunks, embeddings, filename=pdf_file.name, page_numbers=page_numbers)
+        for uploaded_file in uploaded_files:
+            chunks, page_numbers = await st.session_state.processor.load_and_split(uploaded_file, uploaded_file.name)
+            if not chunks:
+                display_message(f"Không thể trích xuất văn bản từ {uploaded_file.name}.", "error")
+                continue
+            total_length = sum(len(chunk) for chunk in chunks)
+            if total_length > 1000000:
+                display_message(f"Nội dung {uploaded_file.name} có thể bị cắt bớt do kích thước lớn.", "warning")
+            embeddings = st.session_state.embedder(chunks)
+            st.session_state.chroma.add(chunks, embeddings, filename=uploaded_file.name, page_numbers=page_numbers)
         display_message("Đã xử lý và lưu tài liệu thành công!", "info")
         st.session_state.has_db_notified = False
     except Exception as e:
@@ -538,10 +613,11 @@ def create_new_conversation(confirmed=False):
     st.session_state.conversation_order.append(conversation_id)
     st.session_state.current_conversation_id = conversation_id
     st.session_state.confirm_delete = False
-    st.session_state.clear_input = True  # Yêu cầu làm trống ô nhập
     st.session_state.last_answer = None
     st.session_state.last_citations = None
     display_message("Đã tạo cuộc trò chuyện mới!", "info")
+    logger.info(f"Created new conversation ID: {conversation_id}, triggering rerun.")
+    st.rerun()
     return True
 
 def display_conversation_list():
@@ -552,20 +628,22 @@ def display_conversation_list():
             if st.sidebar.button(f"Cuộc trò chuyện - {conversation_time}", key=conversation_id):
                 st.session_state.current_conversation_id = conversation_id
                 st.session_state.confirm_delete = False
-                st.session_state.clear_input = True  # Yêu cầu làm trống ô nhập
                 st.session_state.last_answer = None
                 st.session_state.last_citations = None
                 display_message(f"Đã chuyển sang cuộc trò chuyện {conversation_time}", "info")
+                logger.info(f"Switched to conversation ID: {conversation_id}")
     else:
         st.sidebar.write("Chưa có cuộc trò chuyện nào.")
 
 async def handle_query(query: str, llm_type: str, role: str, similarity_threshold: float):
-    if not st.session_state.current_conversation_id:
-        create_new_conversation()
     if "chroma" not in st.session_state or st.session_state.chroma is None or "embedder" not in st.session_state:
-        display_message("Chưa có dữ liệu. Vui lòng tải lên tài liệu PDF.", "warning")
+        display_message("Chưa có dữ liệu. Vui lòng tải lên tài liệu.", "warning")
         return
+
     try:
+        current_conversation_id = st.session_state.current_conversation_id
+        logger.info(f"Handling query with conversation ID: {current_conversation_id}")
+
         @lru_cache(maxsize=100)
         def cached_query(query: str, top_k: int) -> Tuple[List[str], List[dict], List[float]]:
             query = preprocess_text(query)
@@ -601,23 +679,30 @@ async def handle_query(query: str, llm_type: str, role: str, similarity_threshol
 
         answer_generator = AnswerGenerator(role=role)
         await answer_generator.initialize(model_type=llm_type)
-        final_answer = answer_generator.generate_answer(query, context, citations)
+        
+        st.markdown("### Câu trả lời:")
+        response_container = st.empty()
+        response_text = ""
+        async for chunk in answer_generator.generate_answer_stream(query, context, citations):
+            response_text += chunk
+            response_container.markdown(response_text)
 
-        if final_answer.startswith("Error"):
-            display_message(final_answer, "error")
-            return
+        # Ensure we're still using the same conversation ID
+        if st.session_state.current_conversation_id != current_conversation_id:
+            logger.warning(f"Conversation ID changed during query from {current_conversation_id} to {st.session_state.current_conversation_id}")
+            current_conversation_id = st.session_state.current_conversation_id
 
-        current_history = st.session_state.conversations[st.session_state.current_conversation_id]
+        current_history = st.session_state.conversations[current_conversation_id]
         current_history.add_user_message(query)
-        current_history.add_ai_message(final_answer)
-
-        # Lưu câu trả lời và trích dẫn, yêu cầu làm trống ô nhập
-        st.session_state.last_answer = final_answer
+        current_history.add_ai_message(response_text)
+        st.session_state.last_answer = response_text
         st.session_state.last_citations = citations_list
-        st.session_state.clear_input = True
+        st.session_state.query_input_value = ""  # Clear input after successful query
+        logger.info(f"Query handled successfully, conversation ID: {current_conversation_id}, input cleared.")
 
     except Exception as e:
         display_message(f"Lỗi truy vấn: {str(e)}", "error")
+        logger.error(f"Query error: {str(e)}")
 
 def display_query_history():
     if not st.session_state.current_conversation_id:
@@ -685,14 +770,18 @@ async def main():
         st.session_state.has_db_notified = False
     else:
         if not st.session_state.has_db_notified:
-            display_message("Chưa có dữ liệu. Vui lòng tải lên tài liệu PDF.", "warning")
+            display_message("Chưa có dữ liệu. Vui lòng tải lên tài liệu.", "warning")
             st.session_state.has_db_notified = True
 
     st.sidebar.subheader("Quản lý tài liệu")
-    pdf_file = st.sidebar.file_uploader("Tải lên file PDF", type="pdf")
-    if pdf_file:
+    uploaded_files = st.sidebar.file_uploader(
+        "Tải lên tài liệu",
+        type=SUPPORTED_FILE_TYPES,  # Updated to exclude .md
+        accept_multiple_files=True
+    )
+    if uploaded_files:
         with st.spinner("Đang xử lý tài liệu…"):
-            await process_pdf(pdf_file)
+            await process_files(uploaded_files)
 
     if has_db:
         st.sidebar.subheader("Tài liệu đã tải")
@@ -703,51 +792,45 @@ async def main():
     st.sidebar.subheader("Quản lý cuộc trò chuyện")
     if st.sidebar.button("Trò chuyện mới", help="Bắt đầu một cuộc trò chuyện mới", key="new_conversation", type="primary"):
         create_new_conversation()
-        st.rerun()
+        logger.info("New conversation button clicked, rerun triggered.")
 
     if st.session_state.confirm_delete:
         col1, col2 = st.sidebar.columns(2)
         with col1:
             if st.button("Đồng ý xóa"):
                 if create_new_conversation(confirmed=True):
-                    st.rerun()
+                    logger.info("Confirmed delete, rerun triggered.")
         with col2:
             if st.button("Hủy"):
                 st.session_state.confirm_delete = False
                 display_message("Đã hủy tạo cuộc trò chuyện mới.", "info")
+                logger.info("Canceled delete, rerun triggered.")
                 st.rerun()
 
     display_conversation_list()
 
-    # Làm trống ô nhập nếu được yêu cầu
-    input_value = "" if st.session_state.clear_input else st.session_state.get("query_input", "")
-    query_input = st.text_input("Nhập câu hỏi (tiếng Việt):", value=input_value, key="query_input")
-    if st.session_state.clear_input:
-        st.session_state.clear_input = False  # Đặt lại trạng thái sau khi làm trống
+    # Use session state to manage query input value
+    query_input = st.text_input("Nhập câu hỏi (tiếng Việt):", value=st.session_state.query_input_value, key="query_input")
+    st.session_state.query_input_value = query_input  # Update session state with current input
 
     if st.button("Gửi câu hỏi"):
         if query_input:
             with st.spinner("Đang tạo câu trả lời…"):
                 await handle_query(query_input, llm_type, role, similarity_threshold)
 
-    # Hiển thị câu trả lời và trích dẫn nếu có
-    if st.session_state.last_answer:
-        st.markdown("### Câu trả lời cuối cùng:")
-        st.write(st.session_state.last_answer)
-
-        with st.expander("📚 Xem trích dẫn nguồn"):
-            if st.session_state.last_citations:
-                for idx, citation in enumerate(st.session_state.last_citations, 1):
-                    st.markdown(f"#### Trích dẫn {idx}:")
-                    st.markdown(f"- **Nguồn**: {citation['source']}")
-                    st.markdown(f"- **Tài liệu**: {citation['filename']}")
-                    st.markdown(f"- **Trang**: {citation['page_number']}")
-                    st.markdown(f"- **Độ tương đồng (cosine similarity)**: {citation['score']:.4f}")
-                    st.markdown(f"- **Nội dung**:")
-                    st.write(citation['content'])
-                    st.markdown("---")
-            else:
-                st.write(f"Không có trích dẫn nào đạt ngưỡng tương đồng (cosine similarity >= {similarity_threshold}).")
+    with st.expander("📚 Xem trích dẫn nguồn"):
+        if st.session_state.last_citations:
+            for idx, citation in enumerate(st.session_state.last_citations, 1):
+                st.markdown(f"#### Trích dẫn {idx}:")
+                st.markdown(f"- **Nguồn**: {citation['source']}")
+                st.markdown(f"- **Tài liệu**: {citation['filename']}")
+                st.markdown(f"- **Trang**: {citation['page_number']}")
+                st.markdown(f"- **Độ tương đồng (cosine similarity)**: {citation['score']:.4f}")
+                st.markdown(f"- **Nội dung**:")
+                st.write(citation['content'])
+                st.markdown("---")
+        else:
+            st.write(f"Không có trích dẫn nào đạt ngưỡng tương đồng (cosine similarity >= {similarity_threshold}).")
 
     with st.expander("📜 Lịch sử truy vấn"):
         display_query_history()
