@@ -36,6 +36,7 @@ from PIL import Image
 from retry import retry
 from dotenv import load_dotenv
 import aiohttp
+from sqlalchemy import create_engine, text
 
 # Load environment variables
 load_dotenv()
@@ -325,8 +326,33 @@ class AnswerGenerator:
             display_message(f"Answer generation error: {str(e)}", "error")
             return ""
 
-def get_session_history(session_id: str):
-    return SQLChatMessageHistory(session_id=session_id, connection=f"sqlite:///{HISTORY_DB_PATH}")
+def get_session_history(conversation_id: str):
+    return SQLChatMessageHistory(session_id=conversation_id, connection=f"sqlite:///{HISTORY_DB_PATH}")
+
+def load_conversations():
+    """Tải danh sách các conversation_id từ cơ sở dữ liệu SQLite."""
+    try:
+        engine = create_engine(f"sqlite:///{HISTORY_DB_PATH}")
+        with engine.connect() as connection:
+            result = connection.execute(text("SELECT DISTINCT session_id FROM chat_messages ORDER BY session_id"))
+            conversation_ids = [row[0] for row in result]
+        return conversation_ids
+    except Exception as e:
+        logger.error(f"Error loading conversations: {str(e)}")
+        return []
+
+def check_table_exists():
+    """Kiểm tra xem bảng chat_messages có tồn tại trong cơ sở dữ liệu không."""
+    try:
+        engine = create_engine(f"sqlite:///{HISTORY_DB_PATH}")
+        with engine.connect() as connection:
+            result = connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_messages'")
+            )
+            return result.fetchone() is not None
+    except Exception as e:
+        logger.error(f"Error checking table existence: {str(e)}")
+        return False
 
 def wrap_text(text: str, width: float, canvas_obj, font_name: str = "Helvetica", font_size: int = 12) -> List[str]:
     lines = []
@@ -403,10 +429,22 @@ def setup_session_state():
         st.session_state.embedder = SentenceEmbedding(model_path=MODEL_PATH)
     if "chroma" not in st.session_state:
         st.session_state.chroma = ChromaDBManager(persist_directory=CHROMA_DB_PATH)
-    if "query_history" not in st.session_state:
-        st.session_state.query_history = get_session_history("user_default")
+    if "conversations" not in st.session_state:
+        st.session_state.conversations = {}  # Lưu các conversation: {conversation_id: SQLChatMessageHistory}
+    if "conversation_order" not in st.session_state:
+        st.session_state.conversation_order = load_conversations()  # Tải conversation từ DB
+    if "current_conversation_id" not in st.session_state:
+        st.session_state.current_conversation_id = None
     if "has_db_notified" not in st.session_state:
         st.session_state.has_db_notified = False
+    if "confirm_delete" not in st.session_state:
+        st.session_state.confirm_delete = False
+    if "clear_input" not in st.session_state:
+        st.session_state.clear_input = False  # Trạng thái để làm trống ô nhập
+    if "last_answer" not in st.session_state:
+        st.session_state.last_answer = None  # Lưu câu trả lời cuối cùng
+    if "last_citations" not in st.session_state:
+        st.session_state.last_citations = None  # Lưu trích dẫn cuối cùng
 
 def handle_authentication():
     if not st.session_state.authenticated:
@@ -465,7 +503,65 @@ def delete_all_documents():
     except Exception as e:
         display_message(f"Lỗi xóa tài liệu: {str(e)}", "error")
 
+def create_new_conversation(confirmed=False):
+    if len(st.session_state.conversation_order) >= 5 and not confirmed:
+        oldest_conversation = st.session_state.conversation_order[0]
+        st.session_state.confirm_delete = True
+        display_message(
+            f"Đã đạt giới hạn 5 cuộc trò chuyện. Xóa cuộc trò chuyện cũ nhất ({oldest_conversation.split('_')[1]}) để tạo mới?",
+            "warning"
+        )
+        return False
+
+    if confirmed and len(st.session_state.conversation_order) >= 5:
+        oldest_conversation = st.session_state.conversation_order.pop(0)
+        if check_table_exists():
+            try:
+                engine = create_engine(f"sqlite:///{HISTORY_DB_PATH}")
+                with engine.connect() as connection:
+                    connection.execute(
+                        text("DELETE FROM chat_messages WHERE session_id = :conversation_id"),
+                        {"conversation_id": oldest_conversation}
+                    )
+                    connection.commit()
+                del st.session_state.conversations[oldest_conversation]
+                display_message(f"Đã xóa cuộc trò chuyện cũ nhất ({oldest_conversation.split('_')[1]}).", "info")
+            except Exception as e:
+                display_message(f"Lỗi xóa cuộc trò chuyện cũ: {str(e)}", "error")
+                return False
+        else:
+            del st.session_state.conversations[oldest_conversation]
+            display_message(f"Không có dữ liệu lịch sử, đã xóa cuộc trò chuyện cũ nhất ({oldest_conversation.split('_')[1]}).", "info")
+
+    conversation_id = f"conversation_{datetime.now().isoformat()}_{hashlib.md5(str(datetime.now()).encode()).hexdigest()}"
+    st.session_state.conversations[conversation_id] = get_session_history(conversation_id)
+    st.session_state.conversation_order.append(conversation_id)
+    st.session_state.current_conversation_id = conversation_id
+    st.session_state.confirm_delete = False
+    st.session_state.clear_input = True  # Yêu cầu làm trống ô nhập
+    st.session_state.last_answer = None
+    st.session_state.last_citations = None
+    display_message("Đã tạo cuộc trò chuyện mới!", "info")
+    return True
+
+def display_conversation_list():
+    st.sidebar.subheader("Danh sách cuộc trò chuyện")
+    if st.session_state.conversation_order:
+        for conversation_id in reversed(st.session_state.conversation_order):
+            conversation_time = conversation_id.split("_")[1]
+            if st.sidebar.button(f"Cuộc trò chuyện - {conversation_time}", key=conversation_id):
+                st.session_state.current_conversation_id = conversation_id
+                st.session_state.confirm_delete = False
+                st.session_state.clear_input = True  # Yêu cầu làm trống ô nhập
+                st.session_state.last_answer = None
+                st.session_state.last_citations = None
+                display_message(f"Đã chuyển sang cuộc trò chuyện {conversation_time}", "info")
+    else:
+        st.sidebar.write("Chưa có cuộc trò chuyện nào.")
+
 async def handle_query(query: str, llm_type: str, role: str, similarity_threshold: float):
+    if not st.session_state.current_conversation_id:
+        create_new_conversation()
     if "chroma" not in st.session_state or st.session_state.chroma is None or "embedder" not in st.session_state:
         display_message("Chưa có dữ liệu. Vui lòng tải lên tài liệu PDF.", "warning")
         return
@@ -511,31 +607,23 @@ async def handle_query(query: str, llm_type: str, role: str, similarity_threshol
             display_message(final_answer, "error")
             return
 
-        st.session_state.query_history.add_user_message(query)
-        st.session_state.query_history.add_ai_message(final_answer)
+        current_history = st.session_state.conversations[st.session_state.current_conversation_id]
+        current_history.add_user_message(query)
+        current_history.add_ai_message(final_answer)
 
-        st.markdown("### Câu trả lời cuối cùng:")
-        st.write(final_answer)
-
-        with st.expander("📚 Xem trích dẫn nguồn"):
-            if citations_list:
-                for idx, citation in enumerate(citations_list, 1):
-                    st.markdown(f"#### Trích dẫn {idx}:")
-                    st.markdown(f"- **Nguồn**: {citation['source']}")
-                    st.markdown(f"- **Tài liệu**: {citation['filename']}")
-                    st.markdown(f"- **Trang**: {citation['page_number']}")
-                    st.markdown(f"- **Độ tương đồng (cosine similarity)**: {citation['score']:.4f}")
-                    st.markdown(f"- **Nội dung**:")
-                    st.write(citation['content'])
-                    st.markdown("---")
-            else:
-                st.write(f"Không có trích dẫn nào đạt ngưỡng tương đồng (cosine similarity >= {similarity_threshold}).")
+        # Lưu câu trả lời và trích dẫn, yêu cầu làm trống ô nhập
+        st.session_state.last_answer = final_answer
+        st.session_state.last_citations = citations_list
+        st.session_state.clear_input = True
 
     except Exception as e:
         display_message(f"Lỗi truy vấn: {str(e)}", "error")
 
 def display_query_history():
-    messages = st.session_state.query_history.messages
+    if not st.session_state.current_conversation_id:
+        st.write("Chưa có cuộc trò chuyện nào được chọn.")
+        return
+    messages = st.session_state.conversations[st.session_state.current_conversation_id].messages
     for i in range(0, len(messages), 2):
         if i + 1 < len(messages):
             user_msg = messages[i]
@@ -570,7 +658,7 @@ def display_query_history():
         st.download_button(
             "Tải lịch sử truy vấn (PDF)",
             pdf_buffer,
-            file_name="query_history.pdf",
+            file_name=f"query_history_{st.session_state.current_conversation_id}.pdf",
             mime="application/pdf"
         )
 
@@ -612,10 +700,54 @@ async def main():
         if st.sidebar.button("Xóa tất cả tài liệu"):
             delete_all_documents()
 
-    query = st.text_input("Nhập câu hỏi (tiếng Việt):")
-    if query:
-        with st.spinner("Đang tạo câu trả lời…"):
-            await handle_query(query, llm_type, role, similarity_threshold)
+    st.sidebar.subheader("Quản lý cuộc trò chuyện")
+    if st.sidebar.button("Trò chuyện mới", help="Bắt đầu một cuộc trò chuyện mới", key="new_conversation", type="primary"):
+        create_new_conversation()
+        st.rerun()
+
+    if st.session_state.confirm_delete:
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            if st.button("Đồng ý xóa"):
+                if create_new_conversation(confirmed=True):
+                    st.rerun()
+        with col2:
+            if st.button("Hủy"):
+                st.session_state.confirm_delete = False
+                display_message("Đã hủy tạo cuộc trò chuyện mới.", "info")
+                st.rerun()
+
+    display_conversation_list()
+
+    # Làm trống ô nhập nếu được yêu cầu
+    input_value = "" if st.session_state.clear_input else st.session_state.get("query_input", "")
+    query_input = st.text_input("Nhập câu hỏi (tiếng Việt):", value=input_value, key="query_input")
+    if st.session_state.clear_input:
+        st.session_state.clear_input = False  # Đặt lại trạng thái sau khi làm trống
+
+    if st.button("Gửi câu hỏi"):
+        if query_input:
+            with st.spinner("Đang tạo câu trả lời…"):
+                await handle_query(query_input, llm_type, role, similarity_threshold)
+
+    # Hiển thị câu trả lời và trích dẫn nếu có
+    if st.session_state.last_answer:
+        st.markdown("### Câu trả lời cuối cùng:")
+        st.write(st.session_state.last_answer)
+
+        with st.expander("📚 Xem trích dẫn nguồn"):
+            if st.session_state.last_citations:
+                for idx, citation in enumerate(st.session_state.last_citations, 1):
+                    st.markdown(f"#### Trích dẫn {idx}:")
+                    st.markdown(f"- **Nguồn**: {citation['source']}")
+                    st.markdown(f"- **Tài liệu**: {citation['filename']}")
+                    st.markdown(f"- **Trang**: {citation['page_number']}")
+                    st.markdown(f"- **Độ tương đồng (cosine similarity)**: {citation['score']:.4f}")
+                    st.markdown(f"- **Nội dung**:")
+                    st.write(citation['content'])
+                    st.markdown("---")
+            else:
+                st.write(f"Không có trích dẫn nào đạt ngưỡng tương đồng (cosine similarity >= {similarity_threshold}).")
 
     with st.expander("📜 Lịch sử truy vấn"):
         display_query_history()
