@@ -1267,7 +1267,7 @@ async def handle_query(query: str, llm_type: str, role: str, similarity_threshol
                     )
                 context = "\n".join(context_parts) if context_parts else "Không có thông tin phù hợp trong tài liệu."
                 if context_parts:
-                    for meta, doc, dist in sorted_pairs:
+                    for doc, meta, dist in sorted_pairs:
                         if not isinstance(meta, dict):
                             logger.error(f"Invalid metadata format in citations: meta={meta}, type={type(meta)}")
                             continue
