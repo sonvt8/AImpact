@@ -32,6 +32,11 @@ def main():
     # Create the models directory if it doesn't exist
     os.makedirs(MODEL_DIR, exist_ok=True)
 
+    # Check if model already exists
+    if os.path.exists(FINAL_MODEL_PATH):
+        print(f"Model already exists at {FINAL_MODEL_PATH}")
+        return
+
     # Define paths
     gz_path = os.path.join(MODEL_DIR, MODEL_FILENAME)
 
@@ -40,18 +45,22 @@ def main():
         download_file(FASTTEXT_MODEL_URL, gz_path)
     except Exception as e:
         print(f"Error downloading model: {e}")
-        return
+        raise
 
     # Decompress the model
     try:
         decompress_gz(gz_path, FINAL_MODEL_PATH)
     except Exception as e:
         print(f"Error decompressing model: {e}")
-        return
+        raise
 
     # Remove the .gz file
-    os.remove(gz_path)
-    print(f"Model saved to {FINAL_MODEL_PATH}")
+    try:
+        os.remove(gz_path)
+        print(f"Model saved to {FINAL_MODEL_PATH}")
+    except Exception as e:
+        print(f"Error removing .gz file: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
