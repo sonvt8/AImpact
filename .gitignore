@@ -181,3 +181,5 @@ history/
 models/
 rag_system.log
 log.txt
+output/
+documents/

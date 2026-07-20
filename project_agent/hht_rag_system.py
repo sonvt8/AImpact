@@ -47,20 +47,21 @@ pd.set_option('future.no_silent_downcasting', True)
 load_dotenv()
 
 # Cấu hình hệ thống
-DATA_DIR = os.getenv("DATA_DIR", "data")
-HISTORY_DIR = os.getenv("HISTORY_DIR", "history")
-DOCUMENTS_DIR = os.getenv("DOCUMENTS_DIR", "documents")
+import config as cfg
+
+DATA_DIR = cfg.DATA_DIR
+HISTORY_DIR = cfg.HISTORY_DIR
+DOCUMENTS_DIR = cfg.DOCUMENTS_DIR
 CHROMA_DB_PATH = os.path.join(DATA_DIR, "chroma_db")
 ENCRYPTION_KEY_PATH = os.path.join(DATA_DIR, "encryption_key.key")
 HISTORY_DB_PATH = os.path.join(HISTORY_DIR, "query_history.db")
-PASSWORD = os.getenv("APP_PASSWORD", "T0mmy")
-SIMILARITY_THRESHOLD_DEFAULT = float(os.getenv("SIMILARITY_THRESHOLD", 0.5))
-MODEL_PATH = os.getenv("MODEL_PATH", "./models/cc.vi.300.bin")
+PASSWORD = cfg.APP_PASSWORD
+SIMILARITY_THRESHOLD_DEFAULT = cfg.SIMILARITY_THRESHOLD
+MODEL_PATH = cfg.MODEL_PATH
 CHUNK_SIZE = 1500
 CHUNK_OVERLAP = 300
 SUPPORTED_FILE_TYPES = [".txt", ".pdf", ".docx", ".xlsx", ".csv"]
 CONTEXT_WINDOW_SIZE = 5
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Danh sách từ khóa viễn thông
 TELECOM_KEYWORDS = [
@@ -721,48 +722,30 @@ class AnswerGenerator:
     async def initialize(self, model_type: str):
         # Khởi tạo mô hình LLM
         self.model_type = model_type
+        model_kwargs = cfg.build_llm_client_kwargs(model_type)
+        model_kwargs["max_tokens"] = 2000
+        model_kwargs["callbacks"] = [StreamingStdOutCallbackHandler()]
         if model_type == "ollama":
             if not await check_ollama():
                 display_message("Server Ollama không chạy. Chạy 'ollama run llama3.2'.", "error")
                 st.stop()
-            self.model = ChatOllama(
-                base_url="http://localhost:11434",
-                model="llama3.2",
-                temperature=0.1,
-                max_tokens=2000,
-                streaming=True,
-                callbacks=[StreamingStdOutCallbackHandler()]
-            )
-        elif model_type == "openai":
+            self.model = ChatOllama(**model_kwargs)
+        elif model_type in {"openai", "openai_compatible"}:
             if not ChatOpenAI:
                 display_message("Mô-đun langchain-openai chưa cài đặt.", "error")
                 st.stop()
-            if not OPENAI_API_KEY:
-                display_message("Chưa thiết lập khóa API OpenAI.", "error")
-                st.stop()
-            if not await check_internet():
+            if not cfg.LLM_SKIP_INTERNET_CHECK and not await check_internet():
                 display_message("Không có kết nối internet. Chuyển sang Ollama.", "warning")
                 if not await check_ollama():
                     display_message("Server Ollama không chạy.", "error")
                     st.stop()
                 self.model_type = "ollama"
-                self.model = ChatOllama(
-                    base_url="http://localhost:11434",
-                    model="llama3.2",
-                    temperature=0.1,
-                    max_tokens=2000,
-                    streaming=True,
-                    callbacks=[StreamingStdOutCallbackHandler()]
-                )
+                ollama_kwargs = cfg.build_llm_client_kwargs("ollama")
+                ollama_kwargs["max_tokens"] = 2000
+                ollama_kwargs["callbacks"] = [StreamingStdOutCallbackHandler()]
+                self.model = ChatOllama(**ollama_kwargs)
             else:
-                self.model = ChatOpenAI(
-                    model="gpt-4o-mini",
-                    api_key=OPENAI_API_KEY,
-                    temperature=0.1,
-                    max_tokens=2000,
-                    streaming=True,
-                    callbacks=[StreamingStdOutCallbackHandler()]
-                )
+                self.model = ChatOpenAI(**model_kwargs)
         else:
             raise ValueError(f"Loại mô hình không hỗ trợ: {model_type}")
 
