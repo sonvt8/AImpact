@@ -156,6 +156,27 @@ class VectorIndex:
     def count(self) -> int:
         return self.collection.count()
 
+    def list_filenames(self) -> list[str]:
+        result = self.collection.get(include=["metadatas"])
+        return sorted(
+            {
+                metadata["filename"]
+                for metadata in result.get("metadatas") or []
+                if metadata.get("filename")
+            }
+        )
+
+    def delete_file(self, filename) -> None:
+        self.collection.delete(where={"filename": str(filename)})
+
+    def reset(self) -> None:
+        collection_name = self.collection.name
+        self.client.delete_collection(collection_name)
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+
     def _guard_embedding_model(self) -> None:
         if self.collection.count() == 0:
             return

@@ -48,6 +48,11 @@ load_dotenv()
 
 # Cấu hình hệ thống
 import config as cfg
+import embedding
+import index
+import rag
+import service
+import textnorm
 
 DATA_DIR = cfg.DATA_DIR
 HISTORY_DIR = cfg.HISTORY_DIR
@@ -107,7 +112,7 @@ async def check_ollama():
     # Kiểm tra trạng thái server Ollama
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get("http://localhost:11434", timeout=5) as response:
+            async with session.get(cfg.OLLAMA_BASE_URL, timeout=5) as response:
                 return response.status == 200
     except Exception as e:
         logger.error(f"Lỗi kiểm tra server Ollama: {str(e)}")
@@ -749,6 +754,10 @@ class AnswerGenerator:
         else:
             raise ValueError(f"Loại mô hình không hỗ trợ: {model_type}")
 
+    async def stream_prompt(self, prompt: str):
+        async for chunk in self.model.astream(prompt):
+            yield chunk.content
+
     @retry(tries=3, delay=1, backoff=2)
     async def generate_answer_stream(self, question: str, context: str, citations: str, conversation_history: str, is_summary_query: bool = False):
         # Tạo câu trả lời dưới dạng stream
@@ -1007,18 +1016,30 @@ def export_history_to_pdf(history, font_name: str = "Times-Roman", font_size: in
     buffer.seek(0)
     return buffer
 
+@st.cache_resource
+def get_embedder():
+    return embedding.FastTextEmbedder(
+        model_path=cfg.MODEL_PATH,
+        preprocess=textnorm.normalize,
+    ).load()
+
+@st.cache_resource
+def get_index():
+    return index.VectorIndex(
+        persist_directory=CHROMA_DB_PATH,
+        key_path=ENCRYPTION_KEY_PATH,
+        embedding_model_id=cfg.EMBEDDING_MODEL_ID,
+    )
+
+def get_embed_fn():
+    return embedding.make_embed_fn(get_embedder())
+
 def setup_session_state():
     # Thiết lập trạng thái phiên Streamlit
     if "message_placeholder" not in st.session_state:
         st.session_state.message_placeholder = st.empty()
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
-    if "processor" not in st.session_state:
-        st.session_state.processor = DocumentProcessor()
-    if "embedder" not in st.session_state:
-        st.session_state.embedder = SentenceEmbedding()
-    if "chroma" not in st.session_state:
-        st.session_state.chroma = ChromaDBManager(persist_directory=CHROMA_DB_PATH)
     if "conversations" not in st.session_state:
         st.session_state.conversations = {}
     if "conversation_order" not in st.session_state:
@@ -1065,28 +1086,19 @@ async def process_files(uploaded_files):
     # Xử lý các file tải lên
     try:
         for uploaded_file in uploaded_files:
-            results = await st.session_state.processor.load_and_split(uploaded_file, uploaded_file.name)
-            for chunks, page_numbers, situation_ids, sheet_name in results:
-                if not chunks:
-                    display_message(f"Không trích xuất được văn bản từ {uploaded_file.name}, sheet {sheet_name}.", "error")
-                    continue
-                total_length = sum(len(chunk) for chunk in chunks)
-                if total_length > 1000000:
-                    display_message(f"Nội dung {uploaded_file.name} (sheet {sheet_name}) quá lớn.", "warning")
-                embeddings, valid_chunks, valid_indices = st.session_state.embedder(chunks)
-                if not embeddings or not valid_chunks:
-                    display_message(f"Không tạo được embeddings cho {uploaded_file.name} (sheet {sheet_name}).", "error")
-                    continue
-                valid_page_numbers = [page_numbers[i] for i in valid_indices]
-                valid_situation_ids = [situation_ids[i] for i in valid_indices]
-                st.session_state.chroma.add(
-                    texts=valid_chunks,
-                    embeddings=embeddings,
-                    filename=uploaded_file.name,
-                    page_numbers=valid_page_numbers,
-                    sheet_name=sheet_name,
-                    situation_ids=valid_situation_ids
-                )
+            saved_path = os.path.join(DOCUMENTS_DIR, uploaded_file.name)
+            with open(saved_path, "wb") as destination:
+                destination.write(uploaded_file.getbuffer())
+            svc = service.build_service(
+                generator_fn=(lambda prompt: ""),
+                embedder=get_embedder(),
+                index_obj=get_index(),
+            )
+            result = svc.ingest_path(saved_path, uploaded_file.name)
+            display_message(
+                f"{uploaded_file.name}: {result['status']}, added: {result['added']}",
+                "info",
+            )
         display_message("Xử lý và lưu tài liệu thành công!", "info")
         st.session_state.has_db_notified = False
     except Exception as e:
@@ -1095,32 +1107,25 @@ async def process_files(uploaded_files):
 
 def display_documents():
     # Hiển thị danh sách tài liệu
-    if "chroma" in st.session_state:
-        documents = st.session_state.chroma.list_documents()
-        if documents:
-            for doc in documents:
-                st.sidebar.write(f"- {doc}")
-        else:
-            st.sidebar.write("Chưa có tài liệu.")
+    documents = get_index().list_filenames()
+    if documents:
+        for doc in documents:
+            st.sidebar.write(f"- {doc}")
     else:
-        st.sidebar.write("Chưa khởi tạo ChromaDB.")
+        st.sidebar.write("Chưa có tài liệu.")
 
 def delete_all_documents():
     # Xóa tất cả tài liệu
     try:
-        if "chroma" in st.session_state:
-            st.session_state.chroma.reset_collection()
-            st.session_state.chroma = ChromaDBManager(persist_directory=CHROMA_DB_PATH)
-            st.session_state.embedder = SentenceEmbedding()
-            st.session_state.processor = DocumentProcessor()
-            for file in os.listdir(DOCUMENTS_DIR):
-                file_path = os.path.join(DOCUMENTS_DIR, file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-            display_message("Đã xóa tất cả tài liệu!", "info")
-            st.session_state.has_db_notified = False
-        else:
-            display_message("Chưa khởi tạo ChromaDB.", "error")
+        get_index().reset()
+        get_index.clear()
+        get_embedder.clear()
+        for file in os.listdir(DOCUMENTS_DIR):
+            file_path = os.path.join(DOCUMENTS_DIR, file)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        display_message("Đã xóa tất cả tài liệu!", "info")
+        st.session_state.has_db_notified = False
     except Exception as e:
         display_message(f"Lỗi xóa tài liệu: {str(e)}", "error")
 
@@ -1205,108 +1210,35 @@ def get_conversation_context(conversation_id: str) -> str:
 
 async def handle_query(query: str, llm_type: str, role: str, similarity_threshold: float):
     # Xử lý truy vấn người dùng
-    if "chroma" not in st.session_state or st.session_state.chroma is None or "embedder" not in st.session_state:
-        display_message("Chưa có dữ liệu. Vui lòng tải tài liệu.", "warning")
-        return
-
     try:
         current_conversation_id = st.session_state.current_conversation_id
         logger.info(f"Xử lý truy vấn với ID: {current_conversation_id}")
 
-        conversation_history = get_conversation_context(current_conversation_id)
-        logger.info(f"Ngữ cảnh cuộc trò chuyện: {conversation_history}")
-
-        is_summary_query = any(keyword in query.lower() for keyword in ["bao nhiêu sự cố", "tổng số sự cố", "thống kê sự cố", "trong năm vừa qua"])
-        expanded_query = query
-        for term, standard in TERMINOLOGY_MAPPING.items():
-            if term.lower() in query.lower():
-                expanded_query += f" {standard}"
-        logger.info(f"Truy vấn mở rộng: {expanded_query}")
-
-        answer_generator = AnswerGenerator(role=role)
-        await answer_generator.initialize(model_type=llm_type)
-        
-        context = "Không có thông tin từ tài liệu."
-        citations = "Không có trích dẫn."
-        citations_list = []
-        
-        logger.info("Truy vấn cơ sở dữ liệu.")
-        @lru_cache(maxsize=100)
-        def cached_query(query: str, top_k: int) -> Tuple[List[str], List[dict], List[float]]:
-            query = preprocess_text(query, restore=False)
-            emb = st.session_state.embedder([query], is_query=True)
-            res = st.session_state.chroma.query(emb, top_k, query_text=query, is_summary_query=is_summary_query)
-            logger.info(f"Kết quả ChromaDB: documents={len(res['documents']) if res.get('documents') else 0}")
-            docs = res.get("documents", [[]])[0]
-            metas = res.get("metadatas", [[]])[0]
-            dists = res.get("distances", [[]])[0]
-            if not isinstance(docs, list) or not isinstance(metas, list) or not isinstance(dists, list):
-                logger.error(f"Định dạng dữ liệu không hợp lệ")
-                return [], [], []
-            if len(docs) != len(metas) or len(docs) != len(dists):
-                logger.error(f"Độ dài không khớp")
-                return [], [], []
-            return docs, metas, dists
-
-        docs, metas, dists = cached_query(expanded_query, top_k=10)
-        logger.info(f"Lấy được {len(docs)} tài liệu")
-        
-        if not docs or not isinstance(docs, list):
-            context = "Không có thông tin phù hợp."
-            citations = f"Không tìm thấy tài liệu liên quan đến '{query}'."
-        else:
-            relevant_docs = []
-            relevant_metas = []
-            relevant_dists = []
-            
-            for doc, meta, dist in zip(docs, metas, dists):
-                if not isinstance(doc, str) or not isinstance(meta, dict) or not isinstance(dist, (int, float)):
-                    logger.warning(f"Dữ liệu tài liệu không hợp lệ")
-                    continue
-                if dist >= similarity_threshold:
-                    relevant_docs.append(doc)
-                    relevant_metas.append(meta)
-                    relevant_dists.append(dist)
-
-            if relevant_docs:
-                sorted_pairs = sorted(zip(relevant_docs, relevant_metas, relevant_dists), key=lambda x: x[2], reverse=True)[:5]
-                context_parts = []
-                for doc, meta, dist in sorted_pairs:
-                    if not isinstance(meta, dict):
-                        logger.error(f"Định dạng metadata không hợp lệ")
-                        continue
-                    context_parts.append(
-                        f"Tài liệu (Sheet: {meta.get('sheet_name', 'Unknown')}, ID: {meta.get('situation_id', 'Unknown')}, Tương đồng: {dist:.4f}):\n{doc}\n"
-                    )
-                context = "\n".join(context_parts) if context_parts else "Không có thông tin phù hợp."
-                if context_parts:
-                    for doc, meta, dist in sorted_pairs:
-                        if not isinstance(meta, dict):
-                            logger.error(f"Định dạng metadata không hợp lệ")
-                            continue
-                        citations_list.append({
-                            "source": meta.get("source", "Unknown"),
-                            "filename": meta.get("filename", "Unknown"),
-                            "sheet_name": meta.get("sheet_name", "Không xác định"),
-                            "situation_id": meta.get("situation_id", "Không xác định"),
-                            "page_number": meta.get("page_number", "Không xác định"),
-                            "score": dist,
-                            "content": preprocess_text(doc, restore=True)
-                        })
-                    citations = "Có trích dẫn liên quan."
-                else:
-                    context = "Không có thông tin phù hợp."
-                    citations = f"Không tìm thấy tài liệu đạt ngưỡng tương đồng."
-            else:
-                context = "Không có thông tin phù hợp."
-                citations = f"Không tìm thấy tài liệu đạt ngưỡng tương đồng."
+        history = get_conversation_context(current_conversation_id)
+        logger.info(f"Ngữ cảnh cuộc trò chuyện: {history}")
+        vindex = get_index()
+        embed_fn = get_embed_fn()
+        hits = vindex.query(query, embed_fn, top_k=10)
+        prompt, citations_list = rag.answer_or_refuse(
+            query,
+            hits,
+            similarity_threshold,
+            history,
+            role,
+        )
 
         st.markdown("### Câu trả lời:")
         response_container = st.empty()
         response_text = ""
-        async for chunk in answer_generator.generate_answer_stream(query, context, citations, conversation_history, is_summary_query):
-            response_text += chunk
+        if prompt is None:
+            response_text = rag.NO_EVIDENCE_MESSAGE
             response_container.markdown(response_text)
+        else:
+            answer_generator = AnswerGenerator(role=role)
+            await answer_generator.initialize(model_type=llm_type)
+            async for chunk in answer_generator.stream_prompt(prompt):
+                response_text += chunk
+                response_container.markdown(response_text)
 
         if st.session_state.current_conversation_id != current_conversation_id:
             logger.warning(f"ID cuộc trò chuyện thay đổi")
@@ -1374,52 +1306,36 @@ def display_query_history():
 
 def display_summary_data():
     # Hiển thị thống kê sự cố
-    if "chroma" not in st.session_state:
-        st.write("Chưa khởi tạo ChromaDB.")
-        return
-    
-    try:
-        results = st.session_state.chroma.collection.get(include=["documents", "metadatas"])
-        summary_docs = []
-        for doc, meta in zip(results["documents"], results["metadatas"]):
-            if meta.get("sheet_name", "").lower() == "tong hop":
-                decrypted_doc = st.session_state.chroma.cipher.decrypt(doc.encode('utf-8')).decode('utf-8')
-                restored_doc = preprocess_text(decrypted_doc, restore=True)
-                logger.info(f"Tài liệu hiển thị: {restored_doc[:100]}...")
-                summary_docs.append(restored_doc)
-        
-        if summary_docs:
-            st.markdown("### Thống kê sự cố trong năm qua (Sheet Tong hop):")
-            for doc in summary_docs:
-                st.write(doc)
-        else:
-            st.write("Không tìm thấy dữ liệu thống kê.")
-    except Exception as e:
-        st.write(f"Lỗi hiển thị thống kê: {str(e)}")
+    st.info("Thống kê xác định sẽ khả dụng ở bản cập nhật sau.")
 
 async def main():
     # Hàm chính chạy ứng dụng
     st.set_page_config(page_title="RAG Điện Viễn Thông (Nội bộ)", layout="wide")
+    try:
+        cfg.validate()
+    except Exception as e:
+        st.error(f"Cấu hình chưa hợp lệ: {e}")
+        st.stop()
     setup_session_state()
     if not handle_authentication():
         return
 
+    get_embedder()
     st.title("📄 Hệ thống truy vấn tài liệu thông minh")
-    has_db = check_existing_data()
-
-    if has_db and "chroma" in st.session_state:
-        doc_count = st.session_state.chroma.collection.count()
+    doc_count = get_index().count()
+    has_db = doc_count > 0
+    if has_db:
         logger.info(f"Số tài liệu hiện có: {doc_count}")
 
     st.sidebar.header("Cấu hình")
     
     # Khởi tạo giá trị mặc định cho llm_type và role nếu chưa có
     if "llm_type" not in st.session_state:
-        st.session_state.llm_type = "ollama"
+        st.session_state.llm_type = "openai"
     if "role" not in st.session_state:
         st.session_state.role = "Expert"
     if "similarity_threshold" not in st.session_state:
-        st.session_state.similarity_threshold = SIMILARITY_THRESHOLD_DEFAULT
+        st.session_state.similarity_threshold = cfg.SIMILARITY_THRESHOLD
 
     # Sử dụng st.form để nhóm các lựa chọn và tránh rerender không cần thiết
     with st.sidebar.form(key="config_form"):
@@ -1513,13 +1429,13 @@ async def main():
         if st.session_state.last_citations:
             for idx, citation in enumerate(st.session_state.last_citations, 1):
                 st.markdown(f"#### Trích dẫn {idx}:")
-                st.markdown(f"- **Nguồn**: {citation['source']}")
                 st.markdown(f"- **Tài liệu**: {citation['filename']}")
                 st.markdown(f"- **Sheet**: {citation['sheet_name']}")
-                st.markdown(f"- **Situation ID**: {citation['situation_id']}")
-                st.markdown(f"- **Trang**: {citation['page_number']}")
-                st.markdown(f"- **Tương đồng**: {citation['score']:.4f}")
-                st.markdown(f"- **Nội dung**:")
+                st.markdown(f"- **Vị trí**: {citation['locator']}")
+                st.markdown(f"- **Mục (STT)**: {citation['stt']}")
+                st.markdown(f"- **Ngữ cảnh**: {citation['section_path']}")
+                st.markdown(f"- **Tương đồng**: {citation['similarity']:.4f}")
+                st.markdown(f"- **Nội dung (nguyên văn)**:")
                 st.write(citation['content'])
                 st.markdown("---")
         else:

@@ -22,6 +22,10 @@ class Record:
 
 def parse_file(path) -> list[Record]:
     extension = str(path).lower().rsplit(".", 1)[-1]
+    if extension == "pdf":
+        return parse_pdf(path)
+    if extension == "docx":
+        return parse_docx(path)
     if extension == "xlsx":
         return parse_xlsx(path)
     if extension == "txt":
@@ -29,6 +33,69 @@ def parse_file(path) -> list[Record]:
     if extension == "csv":
         return parse_csv(path)
     raise ValueError(f"Unsupported file type: {path}")
+
+
+def parse_pdf(path) -> list[Record]:
+    import pdfplumber
+
+    records = []
+    with pdfplumber.open(path) as document:
+        for page_number, page in enumerate(document.pages, start=1):
+            text = page.extract_text() or ""
+            if not text.strip():
+                try:
+                    import pytesseract
+
+                    text = pytesseract.image_to_string(page.to_image().original) or ""
+                except Exception:
+                    text = ""
+            if text.strip():
+                records.append(
+                    Record(
+                        source_type="pdf",
+                        locator=f"p.{page_number}",
+                        text_verbatim=text,
+                        sheet_name="",
+                        row_index=page_number,
+                        headers=[],
+                        fields={},
+                        section_path=[],
+                        stt=None,
+                        is_section=False,
+                    )
+                )
+    return records
+
+
+def parse_docx(path) -> list[Record]:
+    import docx
+
+    document = docx.Document(path)
+    parts = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
+    parts.extend(
+        cell.text
+        for table in document.tables
+        for row in table.rows
+        for cell in row.cells
+        if cell.text.strip()
+    )
+    text = "\n".join(parts)
+    if not text:
+        return []
+    return [
+        Record(
+            source_type="docx",
+            locator=f"chars:0-{len(text)}",
+            text_verbatim=text,
+            sheet_name="",
+            row_index=None,
+            headers=[],
+            fields={},
+            section_path=[],
+            stt=None,
+            is_section=False,
+        )
+    ]
 
 
 def parse_xlsx(path) -> list[Record]:

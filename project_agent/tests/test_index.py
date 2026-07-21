@@ -193,3 +193,38 @@ def test_embedding_model_guard(tmp_path, workbook_records):
     with pytest.raises(ValueError, match="Embedding model mismatch"):
         create_index(tmp_path, embedding_model_id="m2")
     gc.collect()
+
+def test_list_filenames_reset_delete(tmp_path, workbook_records):
+    record = next(record for record in workbook_records if not record.is_section)
+    vector_index = create_index(tmp_path)
+    try:
+        vector_index.add_records(
+            [record],
+            filename="A.xlsx",
+            doc_checksum="A",
+            embed_fn=stub_embed,
+            parser_version="test-parser-v1",
+        )
+        vector_index.add_records(
+            [record],
+            filename="B.xlsx",
+            doc_checksum="B",
+            embed_fn=stub_embed,
+            parser_version="test-parser-v1",
+        )
+
+        assert vector_index.list_filenames() == ["A.xlsx", "B.xlsx"]
+
+        vector_index.delete_file("A.xlsx")
+
+        assert vector_index.count() == 1
+        assert vector_index.list_filenames() == ["B.xlsx"]
+
+        vector_index.reset()
+
+        assert vector_index.count() == 0
+        assert vector_index.list_filenames() == []
+        assert vector_index.collection.metadata["hnsw:space"] == "cosine"
+    finally:
+        del vector_index
+        gc.collect()
