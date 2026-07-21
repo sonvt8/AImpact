@@ -11,6 +11,9 @@ Hệ thống có thể dùng như **mẫu (blueprint)** để triển khai các 
 
 ## 2) Tính năng chính
 - **Nạp & đánh chỉ mục tài liệu**: hỗ trợ `.txt`, `.pdf`, `.docx`, `.xlsx`, `.csv`. Hệ thống chia nhỏ (chunk) và chuẩn hóa tiếng Việt trước khi lập chỉ mục.
+
+> **Phạm vi parser hiện tại:** chỉ trích xuất text và bảng. Sơ đồ, biểu đồ và ảnh chưa được diễn giải; trang chỉ có ảnh được bỏ qua. OCR/vision là tính năng sẽ phát triển trong tương lai.
+
 - **Embedding tiếng Việt bằng FastText** (`cc.vi.300.bin`) – tải tự động bằng `load_model.py` nếu chưa có.
 - **Kho tri thức bền vững với ChromaDB (persistent)** – lưu/đọc lâu dài trên đĩa.
 - **Mã hóa nội dung** bằng khóa Fernet (tự sinh nếu chưa có) khi lưu trữ; giải mã khi hiển thị.

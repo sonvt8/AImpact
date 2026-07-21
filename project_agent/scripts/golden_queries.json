@@ -1,0 +1,25 @@
+{
+  "_comment": "C-EVAL-1 golden set for retrieval-only threshold calibration. Generic-first: queries phrased as a real operator would ask; relevance judged by expected_sheets membership of retrieved hits (sheet-level relevance is robust and does not hard-code STT/locator). in_scope=true queries SHOULD survive the similarity gate; in_scope=false (out-of-scope) queries SHOULD be refused (NO_EVIDENCE). Extend freely; keep >=8 per class.",
+  "document": "Phu luc 1.xlsx",
+  "queries": [
+    {"id": "in-uctt-1", "in_scope": true, "expected_sheets": ["1.Ds UCTT", "3. Ds VHKT"], "query": "Sự cố mất 1 lộ điện lưới lộ nổi thì hệ thống interlock xử lý thế nào"},
+    {"id": "in-uctt-2", "in_scope": true, "expected_sheets": ["1.Ds UCTT", "3. Ds VHKT"], "query": "Khi mất 2 lưới điện thì khi nào chạy máy phát điện MPĐ"},
+    {"id": "in-uctt-3", "in_scope": true, "expected_sheets": ["1.Ds UCTT"], "query": "Xử lý sự cố điện cho tòa nhà N6"},
+    {"id": "in-uctt-4", "in_scope": true, "expected_sheets": ["1.Ds UCTT"], "query": "Dấu hiệu nhận biết qua đèn còi SMS BMS khi mất điện lưới"},
+    {"id": "in-xlsc-1", "in_scope": true, "expected_sheets": ["2.Ds XLSC"], "query": "UPS không có nguồn vào do trip MCCB đầu vào nên xả ắc quy thì xử lý ra sao"},
+    {"id": "in-xlsc-2", "in_scope": true, "expected_sheets": ["2.Ds XLSC"], "query": "Cô lập phần tử cháy hỏng MCCB của UPS cấu hình 1+1"},
+    {"id": "in-xlsc-3", "in_scope": true, "expected_sheets": ["2.Ds XLSC"], "query": "Giải pháp khi UPS bị sự cố cảnh báo"},
+    {"id": "in-vhkt-1", "in_scope": true, "expected_sheets": ["3. Ds VHKT", "1.Ds UCTT"], "query": "Các tình huống hệ thống AC tự động vận hành theo thiết kế"},
+    {"id": "in-vhkt-2", "in_scope": true, "expected_sheets": ["3. Ds VHKT"], "query": "Vận hành kỹ thuật khi chuyển lộ điện ngầm sang lộ điện nổi"},
+    {"id": "in-mix-1", "in_scope": true, "expected_sheets": ["1.Ds UCTT", "2.Ds XLSC", "3. Ds VHKT"], "query": "Quy trình ứng cứu khi hệ thống điều hòa chính xác ĐHCX cảnh báo"},
+
+    {"id": "out-1", "in_scope": false, "expected_sheets": [], "query": "Cách nấu phở bò ngon tại nhà"},
+    {"id": "out-2", "in_scope": false, "expected_sheets": [], "query": "Thời tiết Hà Nội ngày mai như thế nào"},
+    {"id": "out-3", "in_scope": false, "expected_sheets": [], "query": "Tỷ số trận bóng đá tối qua"},
+    {"id": "out-4", "in_scope": false, "expected_sheets": [], "query": "Chính sách nghỉ phép năm của nhân viên công ty"},
+    {"id": "out-5", "in_scope": false, "expected_sheets": [], "query": "Giá vàng SJC hôm nay bao nhiêu một lượng"},
+    {"id": "out-6", "in_scope": false, "expected_sheets": [], "query": "Công thức tính diện tích hình tròn"},
+    {"id": "out-7", "in_scope": false, "expected_sheets": [], "query": "Gợi ý phim hay để xem cuối tuần"},
+    {"id": "out-8", "in_scope": false, "expected_sheets": [], "query": "Học tiếng Anh giao tiếp cơ bản bắt đầu từ đâu"}
+  ]
+}
