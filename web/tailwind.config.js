@@ -1,0 +1,66 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  darkMode: 'class',
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        bg: 'rgb(var(--color-bg) / <alpha-value>)',
+        surface: 'rgb(var(--color-surface) / <alpha-value>)',
+        'surface-raised': 'rgb(var(--color-surface-raised) / <alpha-value>)',
+        border: 'rgb(var(--color-border) / <alpha-value>)',
+        'border-strong': 'rgb(var(--color-border-strong) / <alpha-value>)',
+        text: 'rgb(var(--color-text) / <alpha-value>)',
+        'text-muted': 'rgb(var(--color-text-muted) / <alpha-value>)',
+        primary: 'rgb(var(--color-primary) / <alpha-value>)',
+        'primary-hover': 'rgb(var(--color-primary-hover) / <alpha-value>)',
+        'primary-foreground': 'rgb(var(--color-primary-foreground) / <alpha-value>)',
+        accent: 'rgb(var(--color-accent) / <alpha-value>)',
+        success: 'rgb(var(--color-success) / <alpha-value>)',
+        warning: 'rgb(var(--color-warning) / <alpha-value>)',
+        danger: 'rgb(var(--color-danger) / <alpha-value>)',
+        ring: 'rgb(var(--color-ring) / <alpha-value>)',
+        instrument: {
+          DEFAULT: 'rgb(var(--color-instrument) / <alpha-value>)',
+          surface: 'rgb(var(--color-instrument-surface) / <alpha-value>)',
+          border: 'rgb(var(--color-instrument-border) / <alpha-value>)',
+          text: 'rgb(var(--color-instrument-text) / <alpha-value>)',
+          muted: 'rgb(var(--color-instrument-muted) / <alpha-value>)',
+          accent: 'rgb(var(--color-instrument-accent) / <alpha-value>)',
+          track: 'rgb(var(--color-instrument-track) / <alpha-value>)',
+          meter: 'rgb(var(--color-instrument-meter) / <alpha-value>)',
+        },
+      },
+      spacing: {
+        control: '2.625rem',
+        topbar: '4.25rem',
+        gutter: '0.875rem',
+        panel: '1.125rem',
+        page: '1.5rem',
+        section: '3.25rem',
+      },
+      borderRadius: {
+        control: '0.5rem',
+        card: '0.75rem',
+        panel: '0.875rem',
+      },
+      boxShadow: {
+        'elevation-sm': 'var(--shadow-sm)',
+        'elevation-md': 'var(--shadow-md)',
+        'elevation-lg': 'var(--shadow-lg)',
+      },
+      fontFamily: {
+        sans: ['IBM Plex Sans', 'Segoe UI', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'Cascadia Mono', 'Consolas', 'ui-monospace', 'monospace'],
+      },
+      fontSize: {
+        micro: ['0.625rem', { lineHeight: '1rem', letterSpacing: '0.12em' }],
+        caption: ['0.75rem', { lineHeight: '1rem' }],
+        body: ['0.875rem', { lineHeight: '1.5rem' }],
+        title: ['1.5rem', { lineHeight: '2rem', letterSpacing: '-0.02em' }],
+        display: ['1.875rem', { lineHeight: '2.25rem', letterSpacing: '-0.025em' }],
+      },
+    },
+  },
+  plugins: [],
+}

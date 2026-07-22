@@ -1,0 +1,38 @@
+[
+  {
+    "id": "9router",
+    "label": "9Router",
+    "base_url": "http://127.0.0.1:20128/v1",
+    "base_url_env": "NROUTER_BASE_URL",
+    "model": "5.6",
+    "key_env": "NROUTER_API_KEY",
+    "key_required": false
+  },
+  {
+    "id": "ollama",
+    "label": "Ollama",
+    "base_url": "http://localhost:11434/v1",
+    "base_url_env": "OLLAMA_BASE_URL",
+    "model": "llama3.2",
+    "key_env": "",
+    "key_required": false
+  },
+  {
+    "id": "openai",
+    "label": "OpenAI",
+    "base_url": "https://api.openai.com/v1",
+    "base_url_env": "OPENAI_BASE_URL",
+    "model": "gpt-4o-mini",
+    "key_env": "OPENAI_API_KEY",
+    "key_required": true
+  },
+  {
+    "id": "grok",
+    "label": "xAI Grok",
+    "base_url": "https://api.x.ai/v1",
+    "base_url_env": "XAI_BASE_URL",
+    "model": "grok-2",
+    "key_env": "XAI_API_KEY",
+    "key_required": true
+  }
+]
