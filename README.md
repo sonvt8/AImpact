@@ -10,7 +10,7 @@ AImpact Web là giao diện nội bộ thay Streamlit cho hệ thống RAG vận
 - Hội thoại tách biệt tuyệt đối theo chủ sở hữu; admin không đọc hội thoại người khác qua API thường.
 - Provider runtime: 9Router, Ollama, OpenAI, xAI Grok; key chỉ đến từ biến môi trường.
 - SQLite cho tài khoản, token, hội thoại và audit; Chroma/FastText vẫn do lõi RAG quản lý.
-- Frontend route-split, initial bundle khoảng 56 kB gzip, không dùng UI framework nặng.
+- Frontend route-split, initial-load khoảng 64 kB gzip (JS khoảng 57 kB + CSS khoảng 7 kB), không dùng UI framework nặng.
 
 ## Yêu cầu
 
@@ -20,6 +20,10 @@ AImpact Web là giao diện nội bộ thay Streamlit cho hệ thống RAG vận
 - Một provider OpenAI-compatible đang chạy hoặc API key tương ứng.
 - Docker Desktop + Docker Compose nếu triển khai container.
 
+### Hai model, hai việc
+
+FastText `cc.vi.300.bin` chạy local để embed câu hỏi/tài liệu, tìm và chấm điểm bằng chứng, rồi quyết định có đủ bằng chứng để trả lời hay không (no-answer gate). LLM qua provider 9Router/OpenAI/Ollama/xAI chỉ diễn đạt câu trả lời từ bằng chứng đã đạt gate. Vì vậy FastText local vẫn bắt buộc dù đã cấu hình provider; provider không thay thế model retrieval này.
+
 ## Chạy nhanh một lệnh (DEV)
 
 Đặt prerequisite ngoài image tại `models/cc.vi.300.bin`, sau đó chạy từ **gốc repo**:
@@ -27,6 +31,14 @@ AImpact Web là giao diện nội bộ thay Streamlit cho hệ thống RAG vận
 ```powershell
 docker compose up --build
 ```
+
+Nếu model không nằm trong `./models`, tạo `.env` cục bộ (đã được Git ignore) và trỏ `AIMPACT_MODELS_DIR` tới **thư mục host chứa** `cc.vi.300.bin` bằng đường dẫn tuyệt đối:
+
+```env
+AIMPACT_MODELS_DIR=/duong/dan/den/thu-muc-chua-model
+```
+
+Compose bind-mount thư mục đó vào `/app/models`, vì vậy `MODEL_PATH` mặc định `/app/models/cc.vi.300.bin` vẫn đúng và không cần đổi.
 
 Không cần tạo `.env`. Ứng dụng mở tại `http://localhost:8000`; health check là `http://localhost:8000/api/health`.
 
@@ -103,7 +115,7 @@ npm --prefix web run build
 npm --prefix web audit
 ```
 
-Kỳ vọng hiện tại: `65 passed`; frontend initial JS khoảng 56 kB gzip.
+Kỳ vọng hiện tại: `65 passed`; frontend initial-load khoảng 64 kB gzip (JS khoảng 57 kB + CSS khoảng 7 kB).
 
 ## Cấu trúc
 

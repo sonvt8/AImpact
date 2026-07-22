@@ -22,6 +22,6 @@
 
 ### Deviations / Blockers
 
-- Repository gốc tại `D:\Playground\AImpact` báo `fatal: unable to write new index file`; công việc được thực hiện trên clean clone nhánh `feature/web-ui` tại `D:\Playground\AImpact\.codex-feature-web-ui` theo fallback đã quy định.
+- Repository gốc báo `fatal: unable to write new index file`; công việc được thực hiện trên clean clone nhánh `feature/web-ui` theo fallback đã quy định.
 - Đặc tả yêu cầu `ChatOpenAI` nhưng đồng thời cấm `langchain*` trong image. Triển khai dùng `httpx` streaming OpenAI-compatible để giữ hành vi mà không thêm LangChain.
 - `chromadb==0.5.0` bắt buộc/import `onnxruntime` transitively. Không thể loại package khỏi image mà vẫn import Chroma; code AImpact không dùng ONNX embedding.

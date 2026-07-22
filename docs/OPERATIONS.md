@@ -9,9 +9,24 @@
 docker compose up --build
 ```
 
+Nếu model nằm ngoài `./models`, tạo `.env` cục bộ (đã Git ignore) với đường dẫn tuyệt đối tới **thư mục chứa** `cc.vi.300.bin`:
+
+```env
+AIMPACT_MODELS_DIR=/duong/dan/den/thu-muc-chua-model
+```
+
+Compose mount thư mục này read-only vào `/app/models`, nên `MODEL_PATH=/app/models/cc.vi.300.bin` vẫn giữ nguyên.
+
 Không cần tạo `.env`. Compose dùng cổng `8000`, admin DEV `admin` / `ChangeMe-Dev-2026`, và bind-mount `models/`, `data/`, `history/`, `documents/`. Admin chỉ được seed khi bảng `users` rỗng; đổi biến sau đó không đổi mật khẩu của tài khoản đã tồn tại.
 
 Khi `JWT_SECRET` trống, entrypoint sinh chuỗi ngẫu nhiên 64 ký tự hex, ghi `data/.jwt_secret` với quyền `600`, rồi đọc lại file này ở các lần restart. Giá trị secret không được in ra log. Nếu đang dùng mật khẩu DEV mặc định, startup in cảnh báo đổi mật khẩu và đặt `JWT_SECRET` riêng cho production nhưng không in mật khẩu.
+
+### Thư mục bind-mount trên host
+
+- `AIMPACT_MODELS_DIR` mặc định `./models`: chứa trực tiếp `cc.vi.300.bin`, được mount read-only.
+- `AIMPACT_DATA_DIR` mặc định `./data`: SQLite, Chroma, key và provider state, được mount writable.
+- `AIMPACT_HISTORY_DIR` mặc định `./history`: history tương thích, được mount writable.
+- `AIMPACT_DOCUMENTS_DIR` mặc định `./documents`: file upload, được mount writable.
 
 ## Production
 
@@ -98,7 +113,9 @@ Không restore Chroma mà thiếu đúng `encryption_key.key`; document text đ�
 - Switch provider: Admin → LLM runtime → Kích hoạt.
 - Tải model động: bấm “Tải model”; API gọi `{base_url}/models`.
 - Đổi model: chọn model trong dropdown; state được ghi `data/providers.state.json`.
-- Local provider trong Docker: dùng `NROUTER_BASE_URL=http://host.docker.internal:20128/v1` hoặc `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1`.
+- 9Router chạy trên host, app chạy bằng Docker: compose mặc định `NROUTER_BASE_URL=http://host.docker.internal:20128/v1` để container gọi cổng `20128` của host.
+- Chạy DEV không Docker: dùng `NROUTER_BASE_URL=http://127.0.0.1:20128/v1`.
+- Ollama chạy trên host, app trong Docker: dùng `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1`.
 - OpenAI/Grok: đặt key trong environment rồi restart; không nhập key qua UI.
 
 Thêm provider mới yêu cầu thêm profile không-secret vào `api/providers.json`, chỉ định `key_env`/`base_url_env`, rebuild image, sau đó cấu hình key qua environment.

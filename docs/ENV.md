@@ -24,14 +24,30 @@ API đọc biến môi trường khi `create_app()` được gọi. Đường d�
 | `LLM_TIMEOUT` | Không | `60` | Timeout HTTP tới provider, giây |
 | `MAX_UPLOAD_MB` | Không | `50` | Giới hạn upload mỗi tệp |
 | `NROUTER_API_KEY` | Tùy provider | rỗng | Key 9Router; profile cho phép `not-needed` |
-| `NROUTER_BASE_URL` | Không | `http://127.0.0.1:20128/v1` | Override base URL 9Router; Docker dùng `host.docker.internal` |
+| `NROUTER_BASE_URL` | Không | Direct: `http://127.0.0.1:20128/v1`; Compose: `http://host.docker.internal:20128/v1` | Base URL 9Router theo vị trí tiến trình gọi proxy |
 | `OLLAMA_BASE_URL` | Không | `http://localhost:11434/v1` | Override base URL Ollama |
 | `OPENAI_BASE_URL` | Không | `https://api.openai.com/v1` | Override endpoint OpenAI-compatible |
 | `XAI_BASE_URL` | Không | `https://api.x.ai/v1` | Override endpoint xAI-compatible |
 | `OPENAI_API_KEY` | Khi dùng OpenAI | rỗng | Key OpenAI, không trả ra client |
 | `XAI_API_KEY` | Khi dùng Grok | rỗng | Key xAI, không trả ra client |
 
-Các biến `AIMPACT_MODELS_DIR`, `AIMPACT_DATA_DIR`, `AIMPACT_HISTORY_DIR`, `AIMPACT_DOCUMENTS_DIR` chỉ dành cho Docker Compose để đổi thư mục bind-mount trên host; mặc định lần lượt là `./models`, `./data`, `./history`, `./documents`.
+## Thư mục host cho Docker Compose
+
+Các biến sau chỉ được Docker Compose dùng để chọn thư mục bind-mount trên host; API trong container vẫn đọc các đường dẫn `/app/...`:
+
+| Biến | Mặc định | Vai trò |
+|---|---|---|
+| `AIMPACT_MODELS_DIR` | `./models` | Thư mục host chứa trực tiếp `cc.vi.300.bin`; đặt đường dẫn tuyệt đối nếu model nằm ngoài repo; mount read-only vào `/app/models` |
+| `AIMPACT_DATA_DIR` | `./data` | SQLite, Chroma, encryption key, provider state và JWT secret DEV; mount writable vào `/app/data` |
+| `AIMPACT_HISTORY_DIR` | `./history` | Dữ liệu history tương thích; mount writable vào `/app/history` |
+| `AIMPACT_DOCUMENTS_DIR` | `./documents` | Tài liệu upload; mount writable vào `/app/documents` |
+
+Nếu `AIMPACT_MODELS_DIR` trỏ đúng thư mục chứa model, không cần đổi `MODEL_PATH`: Compose mount thư mục đó vào `/app/models` và mặc định vẫn là `/app/models/cc.vi.300.bin`.
+
+## Mạng 9Router
+
+- Chạy bằng Docker Compose: container gọi 9Router đang chạy trên host qua `http://host.docker.internal:20128/v1`; compose đã đặt default này.
+- Chạy DEV trực tiếp, không Docker: backend và 9Router cùng ở host nên dùng `http://127.0.0.1:20128/v1`.
 
 ## Ví dụ DEV
 
