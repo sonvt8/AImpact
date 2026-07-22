@@ -183,3 +183,6 @@ rag_system.log
 log.txt
 output/
 documents/
+web/node_modules/
+web/dist/
+api/providers.state.json

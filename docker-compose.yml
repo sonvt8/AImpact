@@ -1,0 +1,39 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      - "${AIMPACT_MODELS_DIR:-./models}:/app/models:ro"
+      - "${AIMPACT_DATA_DIR:-./data}:/app/data"
+      - "${AIMPACT_HISTORY_DIR:-./history}:/app/history"
+      - "${AIMPACT_DOCUMENTS_DIR:-./documents}:/app/documents"
+    environment:
+      JWT_SECRET: "${JWT_SECRET:-}"
+      JWT_ACCESS_EXPIRE_MIN: "${JWT_ACCESS_EXPIRE_MIN:-15}"
+      JWT_REFRESH_EXPIRE_DAYS: "${JWT_REFRESH_EXPIRE_DAYS:-7}"
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-ChangeMe-Dev-2026}"
+      FRONTEND_ORIGIN: "${FRONTEND_ORIGIN:-http://localhost:8000}"
+      DATA_DIR: "${DATA_DIR:-/app/data}"
+      HISTORY_DIR: "${HISTORY_DIR:-/app/history}"
+      DOCUMENTS_DIR: "${DOCUMENTS_DIR:-/app/documents}"
+      MODEL_PATH: "${MODEL_PATH:-/app/models/cc.vi.300.bin}"
+      STATS_WORKBOOK: "${STATS_WORKBOOK:-/app/project_agent/Phu luc 1.xlsx}"
+      DATABASE_PATH: "${DATABASE_PATH:-/app/data/app.db}"
+      PROVIDERS_STATE_PATH: "${PROVIDERS_STATE_PATH:-/app/data/providers.state.json}"
+      FRONTEND_DIST: "${FRONTEND_DIST:-/app/web/dist}"
+      SIMILARITY_THRESHOLD: "${SIMILARITY_THRESHOLD:-0.78}"
+      LLM_TIMEOUT: "${LLM_TIMEOUT:-60}"
+      MAX_UPLOAD_MB: "${MAX_UPLOAD_MB:-50}"
+      NROUTER_API_KEY: "${NROUTER_API_KEY:-}"
+      NROUTER_BASE_URL: "${NROUTER_BASE_URL:-http://host.docker.internal:20128/v1}"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+      XAI_BASE_URL: "${XAI_BASE_URL:-https://api.x.ai/v1}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      XAI_API_KEY: "${XAI_API_KEY:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -1,0 +1,12 @@
+.git
+.venv
+**/__pycache__
+**/*.pyc
+web/node_modules
+web/dist
+data
+history
+documents
+models
+tests_api
+project_agent/tests

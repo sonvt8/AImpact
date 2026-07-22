@@ -1,114 +1,123 @@
+# AImpact Web
 
-# RAG System for Telecom Incident Handling
+AImpact Web là giao diện nội bộ thay Streamlit cho hệ thống RAG vận hành kỹ thuật. Backend FastAPI bọc nguyên lõi trong `project_agent/`; frontend React/Vite/Tailwind ưu tiên tốc độ, khả năng truy vết và trạng thái “không đủ bằng chứng” rõ ràng.
 
-## Purpose
-This Retrieval-Augmented Generation (RAG) system is designed to assist telecom data center technicians in quickly resolving electrical and mechanical incidents. It is optimized for querying the `Phu luc 1.xlsx` document, which contains detailed incident handling procedures for the Hoàng Hoa Thám central station. The system processes Vietnamese technical documents, leveraging specialized telecom terminology (e.g., MPĐ, ATS, Interlock) to provide accurate, context-aware responses. By streamlining access to predefined solutions, it enables technicians to address issues efficiently.
+## Đặc tính chính
 
-The system can serve as a blueprint for building similar RAG systems tailored to other domain-specific documents or extended to handle additional scenarios using advanced techniques.
+- Gate bằng chứng dùng trực tiếp `rag.answer_or_refuse`; nếu không đạt ngưỡng thì không gọi LLM.
+- Trích dẫn giữ nguyên `filename`, `sheet_name`, `locator`, `similarity` và nội dung verbatim.
+- RBAC `viewer` / `user` / `admin`, Argon2, access JWT ngắn hạn và refresh token xoay phía server.
+- Hội thoại tách biệt tuyệt đối theo chủ sở hữu; admin không đọc hội thoại người khác qua API thường.
+- Provider runtime: 9Router, Ollama, OpenAI, xAI Grok; key chỉ đến từ biến môi trường.
+- SQLite cho tài khoản, token, hội thoại và audit; Chroma/FastText vẫn do lõi RAG quản lý.
+- Frontend route-split, initial bundle khoảng 56 kB gzip, không dùng UI framework nặng.
 
-## Prerequisites
-- **Python Version**: Use Python < 3.11 to ensure compatibility with required libraries.
-- **Operating System**: Compatible with Linux, macOS, or Windows.
-- Sufficient disk space for model files (~2GB for `cc.vi.300.bin`).
-- **LLM Requirement**: Either start an Ollama server locally (run `ollama run llama3.2`) or provide an OpenAI API key in the `.env` file for online LLM access.
+## Yêu cầu
 
-## Installation Instructions
+- Python 3.11.
+- Node.js 22+ cho phát triển frontend.
+- FastText Vietnamese model tại `models/cc.vi.300.bin` (khoảng 4.5 GB sau giải nén).
+- Một provider OpenAI-compatible đang chạy hoặc API key tương ứng.
+- Docker Desktop + Docker Compose nếu triển khai container.
 
-1. **Clone the Repository**
-   ```bash
-   git clone <repository-url>
-   cd <repository-directory>
-   ```
+## Chạy nhanh một lệnh (DEV)
 
-2. **Install Dependencies**
-   Install the required Python libraries listed in `requirements.txt`:
-   ```bash
-   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
-   ```
-   Note: Ensure you have pip for Python < 3.11. If issues arise with `underthesea`, consider installing it separately:
-   ```bash
-   pip install underthesea==6.8.0
-   ```
+Đặt prerequisite ngoài image tại `models/cc.vi.300.bin`, sau đó chạy từ **gốc repo**:
 
-3. **Download and Extract FastText Model**
-   Run the `load_model.py` script to download and decompress the Vietnamese FastText model (`cc.vi.300.bin`):
-   ```bash
-   python load_model.py
-   ```
-   This creates a `models` directory with the `cc.vi.300.bin` file.
+```powershell
+docker compose up --build
+```
 
-4. **Configure Environment Variables**
-   Create a `.env` file by copying the provided `.env.example`:
-   ```bash
-   cp .env.example .env
-   ```
-   Edit `.env` to set the following:
-   ```env
-   # API TOKENS
-   OPENAI_API_KEY=<your-openai-api-key>  # Optional, leave empty for Ollama
+Không cần tạo `.env`. Ứng dụng mở tại `http://localhost:8000`; health check là `http://localhost:8000/api/health`.
 
-   # LOCAL PARAMETERS
-   DATA_DIR=data
-   HISTORY_DIR=history
-   DOCUMENTS_DIR=documents
-   MODEL_PATH=./models/cc.vi.300.bin
-   APP_PASSWORD=your_password
-   SIMILARITY_THRESHOLD=0.5
-   ```
-   Replace `your_password` with a secure password for authentication. If using OpenAI, provide a valid API key; otherwise, ensure the Ollama server is running.
+- Admin DEV lần đầu: username `admin`, password `ChangeMe-Dev-2026`. Các giá trị này chỉ seed khi bảng `users` còn rỗng; restart không đổi tài khoản đã tạo.
+- Khi `JWT_SECRET` trống, entrypoint sinh secret ngẫu nhiên 64 ký tự hex, lưu ở `data/.jwt_secret` với quyền `600` và đọc lại sau restart. Secret không được in ra log.
+- Nếu thiếu model, container thoát mã `78` và hướng dẫn đặt `./models/cc.vi.300.bin` thay vì để FastAPI in stacktrace khó hiểu.
+- Cảnh báo DEV luôn nhắc đổi mật khẩu và đặt `JWT_SECRET` riêng trước khi dùng production.
 
-5. **Run the Application**
-   Start the Streamlit application and redirect logs to `log.txt`:
-   ```bash
-   streamlit run hht_rag_system.py --server.fileWatcherType=none > log.txt 2>&1
-   ```
-   The system creates directories (`data`, `history`, `documents`) and log files as needed.  
-   Access the web interface at [http://localhost:8501](http://localhost:8501).
+## Chạy DEV không Docker
 
-## Usage
-- **Authentication**: Enter the password set in `APP_PASSWORD` to access the system.
-- **Upload Documents**: Upload `Phu luc 1.xlsx` via the sidebar to initialize the database.
-- **Querying**: Submit queries in Vietnamese using telecom-specific terms (e.g., "Sự cố mất một lộ điện lưới lộ nổi ở N6, cần làm gì?" or "Lỗi ACB 4000A tủ LV1 cấp tới ATS1, cách xử lý?").
-   The system retrieves relevant procedures from `Phu luc 1.xlsx` and generates detailed responses, including:
-   - **Tình huống**: Incident description (building, system).
-   - **Dấu hiệu nhận biết**: Specific indicators.
-   - **Giải pháp thực hiện**: Step-by-step solutions.
-   - **Nguyên nhân, Mức độ sự cố, Nguồn vật tư, Ghi chú**: Additional details if available.
-- **View Summaries**: Check incident statistics (e.g., total AC, UPS incidents) in the "Xem thống kê sự cố" section.
-- **Export History**: Download query history as a PDF from the "Lịch sử truy vấn" section.
+### 1. Cài backend
 
-### Example Queries
-- "Sự cố mất một lộ điện lưới lộ nổi ở N6, cần làm gì?"
-- "Lỗi ACB 4000A tủ LV1 cấp tới ATS1, cách xử lý?"
-- "Điều hòa đẩy cảnh báo HP, các bước khắc phục?"
-- "Trong năm vừa qua có bao nhiêu sự cố AC?"
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+Copy-Item .env.example .env
+```
 
-## Notes
-- **Language**: All queries and documents must be in Vietnamese for optimal performance.
-- **Terminology**: The system is optimized for telecom terms (e.g., MPĐ, ĐHCX, UDB/PDU) defined in `hht_rag_system.py`.
-- **LLM Setup**: Ensure the Ollama server is running (`ollama run llama3.2`) or an OpenAI API key is configured in `.env` before starting the application.
-- **Limitations**: Currently tailored for `Phu luc 1.xlsx`. Other documents may require preprocessing to align with the system’s schema.
+Trên macOS/Linux, thay lệnh kích hoạt bằng `python3.11 -m venv .venv` và dùng `.venv/bin/python`.
 
-## Extending the System
-The system is a foundation for domain-specific RAG applications. To adapt it:
-- **New Documents**: Modify `DocumentProcessor` in `hht_rag_system.py` to handle different document structures.
-- **Domains**: Update `TELECOM_KEYWORDS` and `TERMINOLOGY_MAPPING` for other fields (e.g., healthcare, manufacturing).
+### 2. Cấu hình tối thiểu
 
-### Enhancements:
-- Integrate advanced LLMs (e.g., Grok 3.5 when available).
-- Add multi-modal support (e.g., image-based incident reports).
-- Implement real-time monitoring via APIs for live incident data.
-- Enhance embeddings with domain-specific fine-tuning.
+Điền `.env`:
 
-## Troubleshooting
-- **Library Installation Issues**: If `underthesea` fails, try installing it in a virtual environment with Python 3.10.
-- **Model Download Errors**: Ensure internet connectivity and sufficient disk space for `cc.vi.300.bin`.
-- **Query Failures**: Verify that `Phu luc 1.xlsx` is uploaded and use precise telecom terminology.
-- **LLM Errors**: Check that the Ollama server is running or the OpenAI API key is valid.
-- **Logs**: Check `log.txt` for detailed error messages.
+```env
+JWT_SECRET=<chuỗi-ngẫu-nhiên-tối-thiểu-32-ký-tự>
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=<mật-khẩu-tối-thiểu-10-ký-tự>
+MODEL_PATH=./models/cc.vi.300.bin
+SIMILARITY_THRESHOLD=0.78
+FRONTEND_ORIGIN=http://localhost:5173
+```
 
-## License
-This project is licensed under the MIT License. See LICENSE for details.
+`ADMIN_USERNAME` và `ADMIN_PASSWORD` chỉ được dùng khi bảng `users` còn rỗng. Không cần `APP_PASSWORD`; API không gọi `project_agent.config.validate()`.
 
-## Contact
-For support, open an issue on the repository or contact the maintainers.
+### 3. Chạy backend và frontend
+
+Terminal 1:
+
+```powershell
+.venv\Scripts\python.exe -m uvicorn api.main:app --reload --port 8000
+```
+
+Terminal 2:
+
+```powershell
+Set-Location web
+npm install
+npm run dev
+```
+
+Mở `http://localhost:5173`. OpenAPI ở `http://localhost:8000/docs`.
+
+## Production
+
+```powershell
+Copy-Item .env.example .env
+# Điền JWT_SECRET (>=32 ký tự), ADMIN_USERNAME, ADMIN_PASSWORD (>=10 ký tự)
+# và FRONTEND_ORIGIN thật, ví dụ https://aimpact.example.internal
+docker compose --env-file .env -f docker-compose.yml -f docker/docker-compose.prod.yml up --build -d
+```
+
+Overlay production không có default cho bốn biến bắt buộc trên: thiếu hoặc để rỗng thì Docker Compose fail ngay trước khi tạo container. Không đặt secret trong compose, image hay log; dùng secret store của môi trường triển khai hoặc file `.env` chỉ lưu cục bộ và đã được Git ignore.
+
+Cả DEV và PROD đều bind-mount `models/` read-only cùng `data/`, `history/`, `documents/` writable. Workbook thống kê dùng file có sẵn trong image tại `/app/project_agent/Phu luc 1.xlsx` qua biến `STATS_WORKBOOK`.
+
+## Test và build
+
+```powershell
+$env:PYTHONPATH=(Resolve-Path project_agent).Path
+.venv\Scripts\python.exe -m pytest project_agent\tests -q
+.venv\Scripts\python.exe -m pytest tests_api -q
+npm --prefix web run build
+npm --prefix web audit
+```
+
+Kỳ vọng hiện tại: `65 passed`; frontend initial JS khoảng 56 kB gzip.
+
+## Cấu trúc
+
+```text
+api/              FastAPI, auth, DB, provider runtime, adapter lõi RAG
+web/              React/Vite/Tailwind
+docker/           Dockerfile, entrypoint và overlay production
+tests_api/        Test hợp đồng API và bảo mật
+docs/             Kiến trúc, API, vận hành, bảo mật, hướng dẫn
+project_agent/    Lõi RAG hiện có, không thay đổi hành vi
+```
+
+## Giới hạn hiện tại
+
+Pipeline chỉ đọc text và bảng; trang chỉ có sơ đồ, biểu đồ hoặc ảnh không được diễn giải. OCR/vision, hybrid retrieval và mở rộng golden set được ghi trong `docs/ROADMAP.md`.
+
+Xem thêm: `docs/ARCHITECTURE.md`, `docs/API_REFERENCE.md`, `docs/ENV.md`, `docs/OPERATIONS.md`, `docs/SECURITY.md`.

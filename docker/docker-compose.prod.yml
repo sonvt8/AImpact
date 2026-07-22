@@ -1,0 +1,8 @@
+services:
+  app:
+    environment:
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET bắt buộc cho production}"
+      ADMIN_USERNAME: "${ADMIN_USERNAME:?ADMIN_USERNAME bắt buộc cho production}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?ADMIN_PASSWORD bắt buộc cho production}"
+      FRONTEND_ORIGIN: "${FRONTEND_ORIGIN:?FRONTEND_ORIGIN bắt buộc cho production}"
+    restart: unless-stopped
