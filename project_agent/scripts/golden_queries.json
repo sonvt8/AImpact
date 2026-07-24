@@ -1,25 +1,307 @@
 {
-  "_comment": "C-EVAL-1 golden set for retrieval-only threshold calibration. Generic-first: queries phrased as a real operator would ask; relevance judged by expected_sheets membership of retrieved hits (sheet-level relevance is robust and does not hard-code STT/locator). in_scope=true queries SHOULD survive the similarity gate; in_scope=false (out-of-scope) queries SHOULD be refused (NO_EVIDENCE). Extend freely; keep >=8 per class.",
+  "schema_version": 2,
   "document": "Phu luc 1.xlsx",
+  "_comment": "S0 offline golden set. Exactly 12 queries per expected route. Structured answers are labels for future executor output; the FastText-only baseline reports exact-answer as a placeholder unless --answers is supplied.",
   "queries": [
-    {"id": "in-uctt-1", "in_scope": true, "expected_sheets": ["1.Ds UCTT", "3. Ds VHKT"], "query": "Sự cố mất 1 lộ điện lưới lộ nổi thì hệ thống interlock xử lý thế nào"},
-    {"id": "in-uctt-2", "in_scope": true, "expected_sheets": ["1.Ds UCTT", "3. Ds VHKT"], "query": "Khi mất 2 lưới điện thì khi nào chạy máy phát điện MPĐ"},
-    {"id": "in-uctt-3", "in_scope": true, "expected_sheets": ["1.Ds UCTT"], "query": "Xử lý sự cố điện cho tòa nhà N6"},
-    {"id": "in-uctt-4", "in_scope": true, "expected_sheets": ["1.Ds UCTT"], "query": "Dấu hiệu nhận biết qua đèn còi SMS BMS khi mất điện lưới"},
-    {"id": "in-xlsc-1", "in_scope": true, "expected_sheets": ["2.Ds XLSC"], "query": "UPS không có nguồn vào do trip MCCB đầu vào nên xả ắc quy thì xử lý ra sao"},
-    {"id": "in-xlsc-2", "in_scope": true, "expected_sheets": ["2.Ds XLSC"], "query": "Cô lập phần tử cháy hỏng MCCB của UPS cấu hình 1+1"},
-    {"id": "in-xlsc-3", "in_scope": true, "expected_sheets": ["2.Ds XLSC"], "query": "Giải pháp khi UPS bị sự cố cảnh báo"},
-    {"id": "in-vhkt-1", "in_scope": true, "expected_sheets": ["3. Ds VHKT", "1.Ds UCTT"], "query": "Các tình huống hệ thống AC tự động vận hành theo thiết kế"},
-    {"id": "in-vhkt-2", "in_scope": true, "expected_sheets": ["3. Ds VHKT"], "query": "Vận hành kỹ thuật khi chuyển lộ điện ngầm sang lộ điện nổi"},
-    {"id": "in-mix-1", "in_scope": true, "expected_sheets": ["1.Ds UCTT", "2.Ds XLSC", "3. Ds VHKT"], "query": "Quy trình ứng cứu khi hệ thống điều hòa chính xác ĐHCX cảnh báo"},
-
-    {"id": "out-1", "in_scope": false, "expected_sheets": [], "query": "Cách nấu phở bò ngon tại nhà"},
-    {"id": "out-2", "in_scope": false, "expected_sheets": [], "query": "Thời tiết Hà Nội ngày mai như thế nào"},
-    {"id": "out-3", "in_scope": false, "expected_sheets": [], "query": "Tỷ số trận bóng đá tối qua"},
-    {"id": "out-4", "in_scope": false, "expected_sheets": [], "query": "Chính sách nghỉ phép năm của nhân viên công ty"},
-    {"id": "out-5", "in_scope": false, "expected_sheets": [], "query": "Giá vàng SJC hôm nay bao nhiêu một lượng"},
-    {"id": "out-6", "in_scope": false, "expected_sheets": [], "query": "Công thức tính diện tích hình tròn"},
-    {"id": "out-7", "in_scope": false, "expected_sheets": [], "query": "Gợi ý phim hay để xem cuối tuần"},
-    {"id": "out-8", "in_scope": false, "expected_sheets": [], "query": "Học tiếng Anh giao tiếp cơ bản bắt đầu từ đâu"}
+    {
+      "id": "structured-ac-vhkt",
+      "route": "structured",
+      "query": "Có bao nhiêu sự cố AC trong VHKT?",
+      "acceptable_locators": ["Tong hop!E3"],
+      "expected_answer": 6,
+      "expected_filter": {"SỰ CỐ": "AC"},
+      "expected_column": "VHKT",
+      "expected_operation": "value",
+      "tags": ["cell_lookup", "count", "AC", "VHKT"]
+    },
+    {
+      "id": "structured-ac-uctt",
+      "route": "structured",
+      "query": "Số phương án UCTT của sự cố AC là bao nhiêu?",
+      "acceptable_locators": ["Tong hop!C3"],
+      "expected_answer": 28,
+      "expected_filter": {"SỰ CỐ": "AC"},
+      "expected_column": "UCTT",
+      "expected_operation": "value",
+      "tags": ["cell_lookup", "AC", "UCTT"]
+    },
+    {
+      "id": "structured-ac-xlsc",
+      "route": "structured",
+      "query": "AC có bao nhiêu phương án XLSC?",
+      "acceptable_locators": ["Tong hop!D3"],
+      "expected_answer": 27,
+      "expected_filter": {"SỰ CỐ": "AC"},
+      "expected_column": "XLSC",
+      "expected_operation": "value",
+      "tags": ["cell_lookup", "AC", "XLSC"]
+    },
+    {
+      "id": "structured-ac-total",
+      "route": "structured",
+      "query": "Tổng cộng các phương án AC là bao nhiêu?",
+      "acceptable_locators": ["Tong hop!F3"],
+      "expected_answer": 61,
+      "expected_filter": {"SỰ CỐ": "AC"},
+      "expected_column": "TỔNG",
+      "expected_operation": "sum",
+      "tags": ["sum", "formula_cache", "AC"]
+    },
+    {
+      "id": "structured-dc-uctt",
+      "route": "structured",
+      "query": "Có bao nhiêu phương án UCTT cho sự cố DC?",
+      "acceptable_locators": ["Tong hop!C4"],
+      "expected_answer": 10,
+      "expected_filter": {"SỰ CỐ": "DC"},
+      "expected_column": "UCTT",
+      "expected_operation": "value",
+      "tags": ["cell_lookup", "AC_vs_DC", "DC"]
+    },
+    {
+      "id": "structured-dc-xlsc",
+      "route": "structured",
+      "query": "Sự cố DC có mấy phương án XLSC?",
+      "acceptable_locators": ["Tong hop!D4"],
+      "expected_answer": 7,
+      "expected_filter": {"SỰ CỐ": "DC"},
+      "expected_column": "XLSC",
+      "expected_operation": "value",
+      "tags": ["cell_lookup", "AC_vs_DC", "DC"]
+    },
+    {
+      "id": "structured-dc-total",
+      "route": "structured",
+      "query": "Tổng số phương án xử lý DC trong bảng tổng hợp là bao nhiêu?",
+      "acceptable_locators": ["Tong hop!F4"],
+      "expected_answer": 17,
+      "expected_filter": {"SỰ CỐ": "DC"},
+      "expected_column": "TỔNG",
+      "expected_operation": "sum",
+      "tags": ["sum", "AC_vs_DC", "DC"]
+    },
+    {
+      "id": "structured-ups-uctt",
+      "route": "structured",
+      "query": "UPS có bao nhiêu tình huống UCTT?",
+      "acceptable_locators": ["Tong hop!C5"],
+      "expected_answer": 12,
+      "expected_filter": {"SỰ CỐ": "UPS"},
+      "expected_column": "UCTT",
+      "expected_operation": "value",
+      "tags": ["cell_lookup", "UPS"]
+    },
+    {
+      "id": "structured-ups-xlsc",
+      "route": "structured",
+      "query": "Có mấy phương án XLSC cho UPS?",
+      "acceptable_locators": ["Tong hop!D5"],
+      "expected_answer": 6,
+      "expected_filter": {"SỰ CỐ": "UPS"},
+      "expected_column": "XLSC",
+      "expected_operation": "value",
+      "tags": ["cell_lookup", "UPS"]
+    },
+    {
+      "id": "structured-dhcx-total",
+      "route": "structured",
+      "query": "Tổng số phương án cho hệ thống điều hòa chính xác là bao nhiêu?",
+      "acceptable_locators": ["Tong hop!F6"],
+      "expected_answer": 16,
+      "expected_filter": {"SỰ CỐ": "ĐHCX"},
+      "expected_column": "TỔNG",
+      "expected_operation": "sum",
+      "tags": ["sum", "paraphrase", "ĐHCX"]
+    },
+    {
+      "id": "structured-udb-total",
+      "route": "structured",
+      "query": "UDB/PDU có tổng cộng bao nhiêu phương án?",
+      "acceptable_locators": ["Tong hop!F7"],
+      "expected_answer": 5,
+      "expected_filter": {"SỰ CỐ": "UDB/PDU"},
+      "expected_column": "TỔNG",
+      "expected_operation": "sum",
+      "tags": ["sum", "UDB_PDU"]
+    },
+    {
+      "id": "structured-vhkt-n4-loi-don",
+      "route": "structured",
+      "query": "Trong danh sách VHKT, có bao nhiêu tình huống AC cho N4 và là lỗi đơn?",
+      "acceptable_locators": ["3. Ds VHKT!A8:L8", "3. Ds VHKT!A9:L9"],
+      "expected_answer": 2,
+      "expected_filter": {"Mảng": "AC", "Dấu hiệu nhận biết": "N4", "Loại lỗi": "Lỗi đơn"},
+      "expected_column": "Stt",
+      "expected_operation": "count",
+      "tags": ["count", "multi_filter", "N4_vs_N6"]
+    },
+    {
+      "id": "vector-n6-lo-noi",
+      "route": "vector",
+      "query": "N6 mất lộ điện nổi thì interlock chuyển nguồn như thế nào?",
+      "acceptable_locators": ["1.Ds UCTT!A6:I6", "3. Ds VHKT!A5:L5"],
+      "tags": ["procedure", "N4_vs_N6", "Form_vs_dataset"]
+    },
+    {
+      "id": "vector-n6-lo-ngam",
+      "route": "vector",
+      "query": "Khi N6 mất lộ điện ngầm, nguồn được chuyển sang đâu?",
+      "acceptable_locators": ["1.Ds UCTT!A7:I7", "3. Ds VHKT!A6:L6"],
+      "tags": ["procedure", "N4_vs_N6", "Form_vs_dataset"]
+    },
+    {
+      "id": "vector-n4-lo-noi",
+      "route": "vector",
+      "query": "N4 mất lộ nổi thì hệ thống SM6 xử lý ra sao?",
+      "acceptable_locators": ["3. Ds VHKT!A8:L8", "1.Ds UCTT!A24:I24"],
+      "tags": ["procedure", "N4_vs_N6"]
+    },
+    {
+      "id": "vector-hdb2-normal",
+      "route": "vector",
+      "query": "Mất cả hai lộ điện ở N6 thì MPĐ cấp nguồn qua HĐB nào theo thiết kế?",
+      "acceptable_locators": ["1.Ds UCTT!A8:I8", "3. Ds VHKT!A7:L7"],
+      "tags": ["procedure", "HĐB1_vs_HĐB2"]
+    },
+    {
+      "id": "vector-hdb1-fallback",
+      "route": "vector",
+      "query": "HĐB 2 lỗi không cấp được hai nhánh phòng máy thì phải chuyển MPĐ thế nào?",
+      "acceptable_locators": ["1.Ds UCTT!A10:I10"],
+      "tags": ["procedure", "HĐB1_vs_HĐB2"]
+    },
+    {
+      "id": "vector-ups-trip-mccb",
+      "route": "vector",
+      "query": "UPS không có nguồn vào do trip MCCB và đang xả ắc quy thì xử lý thế nào?",
+      "acceptable_locators": ["2.Ds XLSC!A4:L4"],
+      "tags": ["procedure", "ACB_vs_MCCB", "Form_vs_dataset"]
+    },
+    {
+      "id": "vector-ups-burned-mccb",
+      "route": "vector",
+      "query": "MCCB đầu vào UPS bị cháy hỏng, cấu hình 1+1 cần cô lập và bypass ra sao?",
+      "acceptable_locators": ["2.Ds XLSC!A5:L5"],
+      "tags": ["procedure", "ACB_vs_MCCB"]
+    },
+    {
+      "id": "vector-udb-trip-mccb",
+      "route": "vector",
+      "query": "Tủ UDB mất nguồn ra vì trip MCCB đầu vào thì khôi phục bằng cách nào?",
+      "acceptable_locators": ["2.Ds XLSC!A17:L17"],
+      "tags": ["procedure", "ACB_vs_MCCB"]
+    },
+    {
+      "id": "vector-acb8-n6",
+      "route": "vector",
+      "query": "ACB8 đầu vào máy phát cấp AMTS3 tại N6 không đóng thì xử lý gì?",
+      "acceptable_locators": ["2.Ds XLSC!A58:L58"],
+      "tags": ["exact_identifier", "ACB_vs_MCCB", "N4_vs_N6"]
+    },
+    {
+      "id": "vector-acb9-n4",
+      "route": "vector",
+      "query": "Có điện từ LV2 đến AMTS3 nhưng ACB9 ở N4 không đóng, thao tác xử lý là gì?",
+      "acceptable_locators": ["2.Ds XLSC!A57:L57"],
+      "tags": ["exact_identifier", "ACB_vs_MCCB", "N4_vs_N6"]
+    },
+    {
+      "id": "vector-dc-rectifier",
+      "route": "vector",
+      "query": "Tủ nguồn DC hỏng nhiều module rectifier gây quá tải thì cần làm gì?",
+      "acceptable_locators": ["1.Ds UCTT!A55:I55"],
+      "tags": ["procedure", "AC_vs_DC"]
+    },
+    {
+      "id": "vector-ups-paraphrase",
+      "route": "vector",
+      "query": "Nguồn lưu điện đang nuôi tải bằng pin vì đầu cấp bị ngắt; cách duy trì tải an toàn là gì?",
+      "acceptable_locators": ["2.Ds XLSC!A4:L4"],
+      "tags": ["paraphrase_no_exact_keyword", "UPS"]
+    },
+    {
+      "id": "refuse-cooking",
+      "route": "refuse",
+      "query": "Cách nấu phở bò ngon tại nhà",
+      "acceptable_locators": [],
+      "tags": ["out_of_domain"]
+    },
+    {
+      "id": "refuse-weather",
+      "route": "refuse",
+      "query": "Thời tiết Hà Nội ngày mai như thế nào?",
+      "acceptable_locators": [],
+      "tags": ["out_of_domain"]
+    },
+    {
+      "id": "refuse-football",
+      "route": "refuse",
+      "query": "Tỷ số trận bóng đá tối qua là bao nhiêu?",
+      "acceptable_locators": [],
+      "tags": ["out_of_domain"]
+    },
+    {
+      "id": "refuse-gold",
+      "route": "refuse",
+      "query": "Giá vàng SJC hôm nay bao nhiêu một lượng?",
+      "acceptable_locators": [],
+      "tags": ["out_of_domain"]
+    },
+    {
+      "id": "refuse-leave-policy",
+      "route": "refuse",
+      "query": "Chính sách nghỉ phép năm của nhân viên công ty là gì?",
+      "acceptable_locators": [],
+      "tags": ["out_of_domain"]
+    },
+    {
+      "id": "refuse-missing-system",
+      "route": "refuse",
+      "query": "Có bao nhiêu sự cố?",
+      "acceptable_locators": [],
+      "tags": ["missing_dimension"]
+    },
+    {
+      "id": "refuse-missing-column",
+      "route": "refuse",
+      "query": "AC có bao nhiêu?",
+      "acceptable_locators": [],
+      "tags": ["missing_dimension", "near_domain"]
+    },
+    {
+      "id": "refuse-n9-ac",
+      "route": "refuse",
+      "query": "Có bao nhiêu tình huống AC tại tòa nhà N9?",
+      "acceptable_locators": [],
+      "tags": ["absent_entity", "near_domain"]
+    },
+    {
+      "id": "refuse-acb99",
+      "route": "refuse",
+      "query": "ACB99 tại N9 không đóng thì quy trình reset thế nào?",
+      "acceptable_locators": [],
+      "tags": ["absent_identifier", "ACB_vs_MCCB", "near_domain"]
+    },
+    {
+      "id": "refuse-transformer-maintenance",
+      "route": "refuse",
+      "query": "Quy trình bảo dưỡng định kỳ máy biến áp dầu trong tài liệu này là gì?",
+      "acceptable_locators": [],
+      "tags": ["near_domain_no_answer"]
+    },
+    {
+      "id": "refuse-negated-ups",
+      "route": "refuse",
+      "query": "Không hỏi về UPS; hãy nêu quy trình chữa cháy khí FM200.",
+      "acceptable_locators": [],
+      "tags": ["negation", "near_domain_no_answer"]
+    },
+    {
+      "id": "refuse-summary-detail-conflict",
+      "route": "refuse",
+      "query": "Nếu sheet Tổng hợp ghi AC trong VHKT là 6 nhưng danh sách chi tiết chỉ có 5 thì phải dùng số nào?",
+      "acceptable_locators": [],
+      "tags": ["summary_detail_conflict", "insufficient_evidence"]
+    }
   ]
 }

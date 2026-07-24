@@ -39,14 +39,12 @@ router = APIRouter(prefix="/api")
 all_roles = require_roles("admin", "user", "viewer")
 admin_only = require_roles("admin")
 
-
 def _sse(event_type: str, **payload) -> str:
     return "data: " + json.dumps({"type": event_type, **payload}, ensure_ascii=False) + "\n\n"
 
 
 def _public_user(user: dict) -> dict:
     return {key: user[key] for key in ("id", "username", "role", "created_at")}
-
 
 @router.post("/auth/login")
 async def login(payload: LoginRequest, request: Request):
@@ -179,30 +177,52 @@ async def query(payload: QueryRequest, request: Request, user: dict = Depends(al
             raise HTTPException(status_code=404, detail="Conversation not found")
 
     rag_service = request.app.state.service_getter()
-    hits = await asyncio.to_thread(
-        rag_service.index_obj.query,
-        payload.query,
-        rag_service.embed_fn,
-        payload.top_k,
-    )
-    threshold = payload.threshold if payload.threshold is not None else request.app.state.providers.threshold()
-    prompt, citations = request.app.state.rag.answer_or_refuse(
-        payload.query,
-        hits,
-        threshold,
-        history,
-        "Trợ lý kỹ thuật",
-    )
+    routed = await asyncio.to_thread(rag_service.route, payload.query)
+    if routed is None:
+        hits = await asyncio.to_thread(
+            rag_service.index_obj.query,
+            payload.query,
+            rag_service.query_embed_fn,
+            payload.top_k,
+        )
+        threshold = payload.threshold if payload.threshold is not None else request.app.state.providers.threshold()
+        prompt, citations = request.app.state.rag.answer_or_refuse(
+            payload.query,
+            hits,
+            threshold,
+            history,
+            "Trợ lý kỹ thuật",
+        )
+    else:
+        prompt = None
+        citations = routed["citations"]
     if payload.conversation_id:
         request.app.state.db.add_message(payload.conversation_id, "user", payload.query)
     request.app.state.db.add_audit(user, "query", payload.conversation_id)
 
     async def events():
+        if routed is not None:
+            answer = str(routed["answer"])
+            if payload.conversation_id:
+                request.app.state.db.add_message(
+                    payload.conversation_id,
+                    "assistant",
+                    answer,
+                    citations,
+                )
+            yield _sse(
+                "final",
+                text=answer,
+                citations=citations,
+                route=routed["route"],
+            )
+            return
+
         if prompt is None:
             answer = request.app.state.rag.NO_EVIDENCE_MESSAGE
             if payload.conversation_id:
                 request.app.state.db.add_message(payload.conversation_id, "assistant", answer)
-            yield _sse("final", text=answer, citations=[])
+            yield _sse("final", text=answer, citations=[], route="refuse")
             return
 
         answer_parts = []
@@ -221,7 +241,7 @@ async def query(payload: QueryRequest, request: Request, user: dict = Depends(al
                 answer,
                 citations,
             )
-        yield _sse("final", citations=citations)
+        yield _sse("final", citations=citations, route="retrieval")
 
     return StreamingResponse(
         events(),
@@ -377,11 +397,14 @@ async def audit(request: Request, _: dict = Depends(admin_only)):
 @router.get("/health")
 async def health(request: Request):
     index_count = 0
-    fasttext_loaded = False
+    embedding_loaded = False
     try:
         rag_service = request.app.state.service_getter()
         index_count = rag_service.index_obj.count()
-        fasttext_loaded = rag_service.embedder._model is not None
+        embedding_loaded = bool(
+            getattr(rag_service.embedder, "_loaded", False)
+            or getattr(rag_service.embedder, "_model", None) is not None
+        )
     except Exception:
         pass
     active = request.app.state.providers.active()
@@ -391,7 +414,7 @@ async def health(request: Request):
     except Exception:
         provider_reachable = False
     return {
-        "fasttext_loaded": fasttext_loaded,
+        "fasttext_loaded": embedding_loaded,
         "index_count": index_count,
         "active_provider": active["id"],
         "provider_reachable": provider_reachable,

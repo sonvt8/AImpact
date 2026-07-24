@@ -16,6 +16,9 @@ from api.routes import router
 from api.settings import Settings, get_settings
 
 
+SUPPORTED_DOCUMENT_SUFFIXES = {".xlsx", ".pdf", ".docx", ".txt", ".csv"}
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     settings.ensure_directories()
@@ -41,6 +44,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "admin",
             )
         providers.validate_active()
+        service = app.state.service_getter()
+        load_embedder = getattr(getattr(service, "embedder", None), "load", None)
+        if callable(load_embedder):
+            load_embedder()
+        if service.index_obj.count() == 0:
+            try:
+                documents = sorted(
+                    (
+                        path
+                        for path in settings.documents_dir.iterdir()
+                        if path.is_file()
+                        and not path.name.startswith(".")
+                        and path.suffix.lower() in SUPPORTED_DOCUMENT_SUFFIXES
+                    ),
+                    key=lambda path: (path.name.casefold(), path.name),
+                )
+                if not any(
+                    path.name.casefold() == settings.stats_workbook.name.casefold()
+                    for path in documents
+                ):
+                    documents.append(settings.stats_workbook)
+                for path in documents:
+                    service.ingest_path(path, path.name)
+            except Exception:
+                service.index_obj.reset()
+                raise
         yield
 
     app = FastAPI(title="AImpact API", version="1.0.0", lifespan=lifespan)

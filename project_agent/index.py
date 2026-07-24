@@ -1,8 +1,60 @@
 import hashlib
 import os
+import re
 
 import chromadb
+from chromadb.config import Settings
+from chromadb.telemetry.product import ProductTelemetryClient
 from cryptography.fernet import Fernet
+from overrides import override
+
+
+RETRIEVAL_PROJECTION_VERSION = "fields-v1"
+DEDUPLICATION_VERSION = "structured-exact-v1"
+QUERY_ALIASES = (
+    ("nguồn lưu điện", "UPS"),
+    ("pin", "ắc quy"),
+    ("đầu cấp bị ngắt", "không có nguồn vào"),
+)
+EXACT_IDENTIFIERS = frozenset(
+    {
+        "AC",
+        "DC",
+        "UPS",
+        "N4",
+        "N6",
+        "ACB8",
+        "ACB9",
+        "MCCB",
+        "HĐB1",
+        "HĐB2",
+        "UDB",
+        "PDU",
+        "VHKT",
+        "UCTT",
+        "XLSC",
+        "FM200",
+    }
+)
+IDENTIFIER_PATTERN = re.compile(
+    r"(?<!\w)(?:"
+    + "|".join(
+        re.escape(value)
+        for value in sorted(EXACT_IDENTIFIERS, key=len, reverse=True)
+    )
+    + r"|ACB\d+|HĐB\d+|N\d+|FM\d+)(?!\w)",
+    re.IGNORECASE,
+)
+TOKEN_PATTERN = re.compile(r"[^\W_]+", re.UNICODE)
+LEXICAL_STOP_WORDS = frozenset(
+    "bị có của đang do gì hãy là như nào ra tại thì trong từ và về với xử lý thế".split()
+)
+
+
+class NoopProductTelemetry(ProductTelemetryClient):
+    @override
+    def capture(self, *args, **kwargs):
+        return None
 
 
 def file_checksum(path) -> str:
@@ -20,8 +72,15 @@ class VectorIndex:
         key_path,
         collection_name="viettel_docs",
         embedding_model_id="fasttext-cc.vi.300-v1",
+        excluded_sheet_prefixes=("Form ",),
     ):
         self.embedding_model_id = embedding_model_id
+        self.excluded_sheet_prefixes = tuple(
+            str(prefix).casefold() for prefix in excluded_sheet_prefixes
+        )
+        self.excluded_sheet_prefixes_metadata = "\n".join(
+            self.excluded_sheet_prefixes
+        )
         key_path = str(key_path)
         key_directory = os.path.dirname(key_path)
         if key_directory:
@@ -36,7 +95,19 @@ class VectorIndex:
         self.fernet = Fernet(key)
 
         os.makedirs(persist_directory, exist_ok=True)
-        self.client = chromadb.PersistentClient(path=str(persist_directory))
+        settings = Settings(
+            anonymized_telemetry=False,
+            chroma_product_telemetry_impl=f"{__name__}.NoopProductTelemetry",
+        )
+        try:
+            self.client = chromadb.PersistentClient(
+                path=str(persist_directory),
+                settings=settings,
+            )
+        except TypeError as error:
+            if "settings" not in str(error):
+                raise
+            self.client = chromadb.PersistentClient(path=str(persist_directory))
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
@@ -53,15 +124,39 @@ class VectorIndex:
     ) -> dict:
         filename = str(filename)
         doc_checksum = str(doc_checksum)
-        data = [record for record in records if not record.is_section]
+        data = []
+        seen = set()
+        for record in records:
+            if record.is_section or str(record.sheet_name).casefold().startswith(
+                self.excluded_sheet_prefixes
+            ):
+                continue
+            dedupe_key = None
+            if record.source_type in {"xlsx", "csv"}:
+                dedupe_key = (
+                    record.source_type,
+                    str(record.sheet_name),
+                    record.text_verbatim,
+                )
+            if dedupe_key is not None and dedupe_key in seen:
+                continue
+            if dedupe_key is not None:
+                seen.add(dedupe_key)
+            data.append(record)
         existing = self.collection.get(
             where={"filename": filename},
             include=["metadatas"],
         )
         existing_metadata = existing.get("metadatas") or []
 
-        if any(
+        if existing_metadata and all(
             metadata.get("doc_checksum") == doc_checksum
+            and metadata.get("parser_version") == str(parser_version)
+            and metadata.get("retrieval_projection_version")
+            == RETRIEVAL_PROJECTION_VERSION
+            and metadata.get("deduplication_version") == DEDUPLICATION_VERSION
+            and metadata.get("excluded_sheet_prefixes")
+            == self.excluded_sheet_prefixes_metadata
             for metadata in existing_metadata
         ):
             return {"status": "skipped_same_checksum", "added": 0}
@@ -72,7 +167,7 @@ class VectorIndex:
             if existing_metadata
             else 1
         )
-        texts = [record.text_verbatim for record in data]
+        texts = [record.text_retrieval for record in data]
         embeddings = embed_fn(texts) if texts else []
         _validate_embeddings(texts, embeddings)
 
@@ -101,6 +196,9 @@ class VectorIndex:
                 "doc_version": version,
                 "parser_version": str(parser_version),
                 "embedding_model_id": str(self.embedding_model_id),
+                "retrieval_projection_version": RETRIEVAL_PROJECTION_VERSION,
+                "deduplication_version": DEDUPLICATION_VERSION,
+                "excluded_sheet_prefixes": self.excluded_sheet_prefixes_metadata,
             }
             for record in data
         ]
@@ -123,13 +221,15 @@ class VectorIndex:
         }
 
     def query(self, query_text, embed_fn, top_k=10, where=None) -> list[dict]:
-        if self.count() == 0 or top_k <= 0:
+        collection_count = self.count()
+        if collection_count == 0 or top_k <= 0:
             return []
-        query_embeddings = embed_fn([query_text])
-        _validate_embeddings([query_text], query_embeddings)
+        expanded_query = _expand_query(query_text)
+        query_embeddings = embed_fn([expanded_query])
+        _validate_embeddings([expanded_query], query_embeddings)
         query_arguments = {
             "query_embeddings": [query_embeddings[0]],
-            "n_results": top_k,
+            "n_results": collection_count,
             "include": ["documents", "metadatas", "distances"],
         }
         if where is not None:
@@ -138,20 +238,47 @@ class VectorIndex:
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
-        return [
-            {
-                "text_verbatim": self.fernet.decrypt(document.encode("utf-8")).decode(
-                    "utf-8"
-                ),
-                "metadata": metadata,
-                "similarity": max(0.0, min(1.0, 1.0 - float(distance))),
-            }
-            for document, metadata, distance in zip(
-                documents,
-                metadatas,
-                distances,
+        query_identifiers = _extract_identifiers(expanded_query)
+        query_tokens = _lexical_tokens(expanded_query)
+        ranked = []
+        for document, metadata, distance in zip(documents, metadatas, distances):
+            text_verbatim = self.fernet.decrypt(document.encode("utf-8")).decode(
+                "utf-8"
             )
-        ]
+            lexical_text = "\n".join(
+                (
+                    text_verbatim,
+                    str(metadata.get("sheet_name", "")),
+                    str(metadata.get("section_path", "")),
+                    str(metadata.get("stt", "")),
+                )
+            )
+            hit_identifiers = _extract_identifiers(lexical_text)
+            identifier_matches = query_identifiers & hit_identifiers
+            token_overlap = query_tokens & _lexical_tokens(lexical_text)
+            lexical_gate = query_identifiers <= hit_identifiers and (
+                bool(query_identifiers) or len(token_overlap) >= 2
+            )
+            similarity = max(0.0, min(1.0, 1.0 - float(distance)))
+            hit = {
+                "text_verbatim": text_verbatim,
+                "metadata": metadata,
+                "similarity": similarity,
+                "lexical_gate": lexical_gate,
+            }
+            ranked.append(
+                (
+                    (
+                        lexical_gate,
+                        len(identifier_matches),
+                        len(token_overlap),
+                        similarity,
+                    ),
+                    hit,
+                )
+            )
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return [hit for _, hit in ranked[:top_k]]
 
     def count(self) -> int:
         return self.collection.count()
@@ -188,6 +315,29 @@ class VectorIndex:
                 "Embedding model mismatch: "
                 f"collection={stored_model!r}, requested={self.embedding_model_id!r}"
             )
+
+
+def _expand_query(query_text) -> str:
+    query_text = str(query_text)
+    folded = query_text.casefold()
+    aliases = [
+        alias
+        for phrase, alias in QUERY_ALIASES
+        if phrase in folded and alias.casefold() not in folded
+    ]
+    return " ".join((query_text, *aliases))
+
+
+def _extract_identifiers(text) -> set[str]:
+    return {match.group(0).upper() for match in IDENTIFIER_PATTERN.finditer(str(text))}
+
+
+def _lexical_tokens(text) -> set[str]:
+    return {
+        token
+        for token in (value.casefold() for value in TOKEN_PATTERN.findall(str(text)))
+        if len(token) > 1 and token not in LEXICAL_STOP_WORDS
+    }
 
 
 def _validate_embeddings(texts, embeddings) -> None:

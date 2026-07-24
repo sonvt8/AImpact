@@ -9,42 +9,42 @@ AImpact Web là giao diện nội bộ thay Streamlit cho hệ thống RAG vận
 - RBAC `viewer` / `user` / `admin`, Argon2, access JWT ngắn hạn và refresh token xoay phía server.
 - Hội thoại tách biệt tuyệt đối theo chủ sở hữu; admin không đọc hội thoại người khác qua API thường.
 - Provider runtime: 9Router, Ollama, OpenAI, xAI Grok; key chỉ đến từ biến môi trường.
-- SQLite cho tài khoản, token, hội thoại và audit; Chroma/FastText vẫn do lõi RAG quản lý.
+- SQLite cho tài khoản, token, hội thoại và audit; Chroma/ONNX E5 vẫn do lõi RAG quản lý.
 - Frontend route-split, initial-load khoảng 64 kB gzip (JS khoảng 57 kB + CSS khoảng 7 kB), không dùng UI framework nặng.
 
 ## Yêu cầu
 
 - Python 3.11.
 - Node.js 22+ cho phát triển frontend.
-- FastText Vietnamese model tại `models/cc.vi.300.bin` (khoảng 4.5 GB sau giải nén).
+- Bundle `intfloat/multilingual-e5-small` tại `models/multilingual-e5-small-onnx/`, gồm `manifest.json`, `tokenizer.json` và `onnx/model_O4.onnx`.
 - Một provider OpenAI-compatible đang chạy hoặc API key tương ứng.
 - Docker Desktop + Docker Compose nếu triển khai container.
 
 ### Hai model, hai việc
 
-FastText `cc.vi.300.bin` chạy local để embed câu hỏi/tài liệu, tìm và chấm điểm bằng chứng, rồi quyết định có đủ bằng chứng để trả lời hay không (no-answer gate). LLM qua provider 9Router/OpenAI/Ollama/xAI chỉ diễn đạt câu trả lời từ bằng chứng đã đạt gate. Vì vậy FastText local vẫn bắt buộc dù đã cấu hình provider; provider không thay thế model retrieval này.
+Bundle ONNX `intfloat/multilingual-e5-small` chạy local để embed câu hỏi/tài liệu, tìm và chấm điểm bằng chứng, rồi quyết định có đủ bằng chứng để trả lời hay không (no-answer gate). Runtime chỉ đọc bundle có sẵn và không tải model từ mạng. LLM qua provider 9Router/OpenAI/Ollama/xAI chỉ diễn đạt câu trả lời từ bằng chứng đã đạt gate; FastText chỉ còn là đường rollback qua `MODEL_PATH` trỏ tới file `.bin`.
 
 ## Chạy nhanh một lệnh (DEV)
 
-Đặt prerequisite ngoài image tại `models/cc.vi.300.bin`, sau đó chạy từ **gốc repo**:
+Đặt bundle ngoài image tại `models/multilingual-e5-small-onnx/`, sau đó chạy từ **gốc repo**:
 
 ```powershell
 docker compose up --build
 ```
 
-Nếu model không nằm trong `./models`, tạo `.env` cục bộ (đã được Git ignore) và trỏ `AIMPACT_MODELS_DIR` tới **thư mục host chứa** `cc.vi.300.bin` bằng đường dẫn tuyệt đối:
+Nếu bundle không nằm trong `./models`, tạo `.env` cục bộ (đã được Git ignore) và trỏ `AIMPACT_MODELS_DIR` tới **thư mục cha host chứa** `multilingual-e5-small-onnx/` bằng đường dẫn tuyệt đối:
 
 ```env
 AIMPACT_MODELS_DIR=/duong/dan/den/thu-muc-chua-model
 ```
 
-Compose bind-mount thư mục đó vào `/app/models`, vì vậy `MODEL_PATH` mặc định `/app/models/cc.vi.300.bin` vẫn đúng và không cần đổi.
+Compose bind-mount thư mục cha đó read-only vào `/app/models`, vì vậy `MODEL_PATH` mặc định `/app/models/multilingual-e5-small-onnx` vẫn đúng và không cần đổi.
 
 Không cần tạo `.env`. Ứng dụng mở tại `http://localhost:8000`; health check là `http://localhost:8000/api/health`.
 
 - Admin DEV lần đầu: username `admin`, password `ChangeMe-Dev-2026`. Các giá trị này chỉ seed khi bảng `users` còn rỗng; restart không đổi tài khoản đã tạo.
 - Khi `JWT_SECRET` trống, entrypoint sinh secret ngẫu nhiên 64 ký tự hex, lưu ở `data/.jwt_secret` với quyền `600` và đọc lại sau restart. Secret không được in ra log.
-- Nếu thiếu model, container thoát mã `78` và hướng dẫn đặt `./models/cc.vi.300.bin` thay vì để FastAPI in stacktrace khó hiểu.
+- Nếu thiếu bundle, container thoát mã `78` thay vì để FastAPI in stacktrace khó hiểu.
 - Cảnh báo DEV luôn nhắc đổi mật khẩu và đặt `JWT_SECRET` riêng trước khi dùng production.
 
 ## Chạy DEV không Docker
@@ -67,8 +67,9 @@ Trên macOS/Linux, thay lệnh kích hoạt bằng `python3.11 -m venv .venv` v�
 JWT_SECRET=<chuỗi-ngẫu-nhiên-tối-thiểu-32-ký-tự>
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=<mật-khẩu-tối-thiểu-10-ký-tự>
-MODEL_PATH=./models/cc.vi.300.bin
-SIMILARITY_THRESHOLD=0.78
+MODEL_PATH=./models/multilingual-e5-small-onnx
+EMBEDDING_MODEL_ID=intfloat-multilingual-e5-small-onnx-o4-v1
+SIMILARITY_THRESHOLD=0.84
 FRONTEND_ORIGIN=http://localhost:5173
 ```
 

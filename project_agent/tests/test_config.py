@@ -3,6 +3,7 @@ import importlib
 import pytest
 
 import config
+from api.settings import Settings
 
 
 ENV_KEYS = (
@@ -72,9 +73,30 @@ def test_ollama_defaults(monkeypatch):
 
     cfg.validate()
     assert cfg.LLM_SKIP_INTERNET_CHECK is True
+    assert cfg.MODEL_PATH == "./models/multilingual-e5-small-onnx"
+    assert cfg.EMBEDDING_MODEL_ID == "intfloat-multilingual-e5-small-onnx-o4-v1"
+    assert cfg.SIMILARITY_THRESHOLD == 0.84
     assert cfg.build_llm_client_kwargs("ollama") == {
         "model": "llama3.2",
         "base_url": "http://localhost:11434",
         "temperature": 0.1,
         "streaming": True,
     }
+
+@pytest.mark.parametrize("model_kind", ("file", "directory"))
+def test_api_settings_accepts_model_file_or_directory(
+    monkeypatch, tmp_path, model_kind
+):
+    model_path = tmp_path / "model"
+    model_path.write_bytes(b"model") if model_kind == "file" else model_path.mkdir()
+    stats_workbook = tmp_path / "stats.xlsx"
+    stats_workbook.write_bytes(b"workbook")
+    monkeypatch.setenv("AIMPACT_ROOT", str(tmp_path))
+    monkeypatch.setenv("MODEL_PATH", str(model_path))
+    monkeypatch.setenv("STATS_WORKBOOK", str(stats_workbook))
+    monkeypatch.setenv("JWT_SECRET", "x" * 32)
+    monkeypatch.delenv("SIMILARITY_THRESHOLD", raising=False)
+
+    settings = Settings.from_env()
+    settings.validate()
+    assert settings.similarity_threshold == 0.84

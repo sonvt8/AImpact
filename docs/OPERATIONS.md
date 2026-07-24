@@ -2,20 +2,20 @@
 
 ## Chạy nhanh một lệnh (DEV)
 
-1. Đặt FastText model ngoài image tại `models/cc.vi.300.bin` (khoảng 4.5 GB).
+1. Đặt bundle E5 ngoài image tại `models/multilingual-e5-small-onnx/`, gồm `manifest.json`, `tokenizer.json` và `onnx/model_O4.onnx`.
 2. Từ gốc repo, chạy:
 
 ```powershell
 docker compose up --build
 ```
 
-Nếu model nằm ngoài `./models`, tạo `.env` cục bộ (đã Git ignore) với đường dẫn tuyệt đối tới **thư mục chứa** `cc.vi.300.bin`:
+Nếu bundle nằm ngoài `./models`, tạo `.env` cục bộ (đã Git ignore) với đường dẫn tuyệt đối tới **thư mục cha chứa** `multilingual-e5-small-onnx/`:
 
 ```env
 AIMPACT_MODELS_DIR=/duong/dan/den/thu-muc-chua-model
 ```
 
-Compose mount thư mục này read-only vào `/app/models`, nên `MODEL_PATH=/app/models/cc.vi.300.bin` vẫn giữ nguyên.
+Compose mount thư mục cha này read-only vào `/app/models`, nên `MODEL_PATH=/app/models/multilingual-e5-small-onnx` vẫn giữ nguyên. Runtime không tải model từ mạng.
 
 Không cần tạo `.env`. Compose dùng cổng `8000`, admin DEV `admin` / `ChangeMe-Dev-2026`, và bind-mount `models/`, `data/`, `history/`, `documents/`. Admin chỉ được seed khi bảng `users` rỗng; đổi biến sau đó không đổi mật khẩu của tài khoản đã tồn tại.
 
@@ -23,7 +23,7 @@ Khi `JWT_SECRET` trống, entrypoint sinh chuỗi ngẫu nhiên 64 ký tự hex,
 
 ### Thư mục bind-mount trên host
 
-- `AIMPACT_MODELS_DIR` mặc định `./models`: chứa trực tiếp `cc.vi.300.bin`, được mount read-only.
+- `AIMPACT_MODELS_DIR` mặc định `./models`: là thư mục cha chứa `multilingual-e5-small-onnx/`, được mount read-only.
 - `AIMPACT_DATA_DIR` mặc định `./data`: SQLite, Chroma, key và provider state, được mount writable.
 - `AIMPACT_HISTORY_DIR` mặc định `./history`: history tương thích, được mount writable.
 - `AIMPACT_DOCUMENTS_DIR` mặc định `./documents`: file upload, được mount writable.
@@ -122,21 +122,25 @@ Thêm provider mới yêu cầu thêm profile không-secret vào `api/providers.
 
 ## Threshold
 
-- Mặc định: `0.78`.
+- Mặc định: `0.84`.
 - Admin UI thay đổi runtime mà không sửa code/restart.
-- Mức thận trọng tối đa khuyến nghị: `0.84`; có thể chặn gần toàn bộ câu ngoài phạm vi nhưng từ chối nhầm khoảng 1/10 câu hợp lệ theo hiệu chỉnh hiện tại.
+- Chỉ hạ ngưỡng sau khi chạy lại golden evaluation cho bundle và dữ liệu thực tế.
 - State runtime ưu tiên hơn env sau lần tạo `providers.state.json`. Muốn reset theo env, dừng app, backup rồi xóa trường `threshold` hoặc file state.
 
 ## Troubleshooting
 
 ### Startup báo MODEL_PATH không tồn tại
 
-Kiểm file và mount:
+Kiểm bundle và mount:
 
 ```powershell
-Test-Path models\cc.vi.300.bin
+Test-Path models\multilingual-e5-small-onnx\manifest.json
+Test-Path models\multilingual-e5-small-onnx\tokenizer.json
+Test-Path models\multilingual-e5-small-onnx\onnx\model_O4.onnx
 docker compose config --quiet
 ```
+
+`MODEL_PATH` cũng chấp nhận file FastText `.bin` khi rollback.
 
 ### Provider không reachable
 
@@ -157,6 +161,6 @@ Kiểm extension, `MAX_UPLOAD_MB`, quyền ghi `documents/`, dung lượng disk 
 
 Pipeline hiện không OCR ảnh. PDF chỉ có ảnh có thể không tạo record hữu ích; đây không phải lỗi provider. Chuyển tài liệu thành PDF có text hoặc chờ roadmap OCR/vision.
 
-### Chroma/ONNX footprint
+### ONNX runtime
 
-`chromadb==0.5.0` import default embedding module phụ thuộc `onnxruntime` dù AImpact dùng FastText embedding riêng. Không gỡ package thủ công khỏi image hiện tại; việc đó làm import Chroma thất bại.
+AImpact dùng trực tiếp `onnxruntime==1.20.0` và `tokenizers==0.23.1`; không dùng `fastembed`. Giữ `ANONYMIZED_TELEMETRY=FALSE`. FastText chỉ còn là rollback và không phải runtime mặc định.

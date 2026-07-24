@@ -10,9 +10,9 @@ APP_PASSWORD = os.getenv("APP_PASSWORD") or None
 DATA_DIR = os.getenv("DATA_DIR", "data")
 HISTORY_DIR = os.getenv("HISTORY_DIR", "history")
 DOCUMENTS_DIR = os.getenv("DOCUMENTS_DIR", "documents")
-MODEL_PATH = os.getenv("MODEL_PATH", "./models/cc.vi.300.bin")
+MODEL_PATH = os.getenv("MODEL_PATH", "./models/multilingual-e5-small-onnx")
 
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.5"))
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.84"))
 
 LLM_BACKEND = os.getenv("LLM_BACKEND", "openai_compatible").strip().lower()
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
@@ -25,7 +25,9 @@ LLM_SKIP_INTERNET_CHECK = os.getenv(
     "LLM_SKIP_INTERNET_CHECK", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
-EMBEDDING_MODEL_ID = os.getenv("EMBEDDING_MODEL_ID", "fasttext-cc.vi.300-v1")
+EMBEDDING_MODEL_ID = os.getenv(
+    "EMBEDDING_MODEL_ID", "intfloat-multilingual-e5-small-onnx-o4-v1"
+)
 DOMAIN_PROFILE = os.getenv("DOMAIN_PROFILE", "")
 
 

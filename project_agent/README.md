@@ -14,7 +14,7 @@ Hệ thống có thể dùng như **mẫu (blueprint)** để triển khai các 
 
 > **Phạm vi parser hiện tại:** chỉ trích xuất text và bảng. Sơ đồ, biểu đồ và ảnh chưa được diễn giải; trang chỉ có ảnh được bỏ qua. OCR/vision là tính năng sẽ phát triển trong tương lai.
 
-- **Embedding tiếng Việt bằng FastText** (`cc.vi.300.bin`) – tải tự động bằng `load_model.py` nếu chưa có.
+- **Embedding đa ngôn ngữ offline bằng ONNX E5** (`intfloat/multilingual-e5-small`) từ bundle local có kiểm tra SHA-256.
 - **Kho tri thức bền vững với ChromaDB (persistent)** – lưu/đọc lâu dài trên đĩa.
 - **Mã hóa nội dung** bằng khóa Fernet (tự sinh nếu chưa có) khi lưu trữ; giải mã khi hiển thị.
 - **Chọn LLM linh hoạt**:
@@ -27,13 +27,13 @@ Hệ thống có thể dùng như **mẫu (blueprint)** để triển khai các 
 ## 3) Yêu cầu hệ thống
 - **Python ≤ 3.11 (khuyến nghị 3.11.4)**.  
 - Hệ điều hành: Windows / macOS / Linux.
-- Dung lượng trống ~**2GB** cho file model `cc.vi.300.bin`.
+- Dung lượng trống đủ cho bundle `models/multilingual-e5-small-onnx/`.
 - (Tùy chọn) **Tesseract OCR** nếu muốn trích xuất chữ từ PDF scan.
 - **LLM**:
   - **Ollama**: cài và chạy `ollama`, có sẵn model `llama3.2`;
   - **Hoặc** cấu hình **OpenAI** với `OPENAI_API_KEY` để dùng `gpt-4o-mini`.
 
-> **Khuyến nghị cho Windows**: Nếu gặp lỗi khi cài các gói native (như `fasttext`, `onnxruntime`), hãy đảm bảo dùng **Python 3.11.x**, hoặc cân nhắc **Conda**/**WSL**. Với trường hợp buộc phải build, cần cài **Microsoft C++ Build Tools** và (nếu cần) toolchain Rust/maturin.
+> **Khuyến nghị cho Windows**: Nếu gặp lỗi `onnxruntime`, hãy đảm bảo dùng **Python 3.11.x** và Microsoft Visual C++ Redistributable. `fasttext` chỉ cần khi rollback.
 
 ## 4) Cài đặt
 
@@ -53,15 +53,19 @@ source venv/bin/activate
 # Cài gói phụ thuộc
 pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
-> `requirements.txt` đã liệt kê các gói cốt lõi: `streamlit`, `chromadb`, `openai`, `langchain`, `langgraph`, `pdfplumber`, `pytesseract`, `fasttext`, v.v.
+> Runtime embedding dùng trực tiếp `onnxruntime==1.20.0` và `tokenizers==0.23.1`; không cần `fastembed`. Các gói FastText được giữ để rollback.
 
-### 4.2. Tải & giải nén model FastText (tự động/hoặc thủ công)
-- **Tự động**: Lần chạy đầu, nếu chưa có `./models/cc.vi.300.bin`, ứng dụng sẽ tự gọi script tải model.
-- **Thủ công** (tùy chọn):
-  ```bash
-  python load_model.py
-  ```
-  Sau khi hoàn tất, thư mục `models/` sẽ chứa `cc.vi.300.bin`.
+### 4.2. Chuẩn bị bundle embedding local
+
+Đặt bundle tại `./models/multilingual-e5-small-onnx/` với đúng cấu trúc:
+
+```text
+manifest.json
+tokenizer.json
+onnx/model_O4.onnx
+```
+
+Runtime xác minh SHA-256 theo `manifest.json` và không tải model từ mạng. `load_model.py` chỉ còn phục vụ rollback FastText khi cần.
 
 ## 5) Cấu hình `.env`
 Tạo file `.env` ở thư mục gốc (cùng cấp `hht_rag_system.py`), ví dụ:
@@ -71,19 +75,20 @@ DATA_DIR=./data
 HISTORY_DIR=./history
 DOCUMENTS_DIR=./documents
 
-# Đường dẫn model FastText
-MODEL_PATH=./models/cc.vi.300.bin
+# Đường dẫn bundle ONNX E5 local
+MODEL_PATH=./models/multilingual-e5-small-onnx
+EMBEDDING_MODEL_ID=intfloat-multilingual-e5-small-onnx-o4-v1
 
 # Mật khẩu truy cập giao diện
 APP_PASSWORD=T0mmy
 
 # Ngưỡng tương đồng cosine (0..1)
-SIMILARITY_THRESHOLD=0.5
+SIMILARITY_THRESHOLD=0.84
 
 # (Tuỳ chọn) OpenAI API cho chế độ online
 OPENAI_API_KEY=sk-...
 ```
-> Nếu không đặt `.env`, chương trình dùng mặc định: `DATA_DIR=data`, `HISTORY_DIR=history`, `DOCUMENTS_DIR=documents`, `MODEL_PATH=./models/cc.vi.300.bin`, `APP_PASSWORD=T0mmy`, `SIMILARITY_THRESHOLD=0.5`.
+> Nếu không đặt `.env`, chương trình dùng mặc định: `DATA_DIR=data`, `HISTORY_DIR=history`, `DOCUMENTS_DIR=documents`, `MODEL_PATH=./models/multilingual-e5-small-onnx`, `EMBEDDING_MODEL_ID=intfloat-multilingual-e5-small-onnx-o4-v1`, `SIMILARITY_THRESHOLD=0.84`.
 
 ## 6) Chạy ứng dụng
 ```bash
@@ -103,19 +108,19 @@ streamlit run hht_rag_system.py --server.fileWatcherType=none
 
 ## 8) Cấu trúc & các tệp chính
 - **`hht_rag_system.py`**: Entry UI Streamlit & pipeline RAG (tiền xử lý, mã hóa/giải mã, truy vấn, trích dẫn, thống kê Excel, chọn LLM/fallback).
-- **`load_model.py`**: Tải và giải nén Vietnamese FastText `cc.vi.300.bin`.
+- **`load_model.py`**: Công cụ di sản để chuẩn bị FastText khi rollback.
 - **`Phu luc 1.xlsx`**: Tài liệu phụ lục (nội bộ) dùng để thử nghiệm/triển khai.
 - **`requirements.txt`**: Danh sách phụ thuộc Python cho dự án.
 
 ## 9) Sự cố thường gặp
-- **Không cài được gói trên Windows** (đặc biệt Python 3.12): hãy dùng **Python 3.11.4**. Nếu vẫn cần build native, cài **MSVC Build Tools**, và thử lại.  
+- **Không cài được gói trên Windows** (đặc biệt Python 3.12): hãy dùng **Python 3.11.4** và wheel đã pin. FastText native chỉ cần khi rollback.
 - **`onnxruntime` báo lỗi DLL**: cài/ cập nhật **Microsoft Visual C++ Redistributable (x64)** và dùng phiên bản ORT tương thích với NumPy hiện tại; khuyến nghị bám Python 3.11.x.
 - **OCR không hoạt động**: cài Tesseract và đảm bảo `pytesseract` nhìn thấy `tesseract.exe` (Windows) hoặc binary (macOS/Linux).
 - **Không kết nối được Ollama**: đảm bảo dịch vụ đang chạy (`ollama serve`), model `llama3.2` đã pull (`ollama run llama3.2`).
 
 ## 10) Mở rộng
 - Thêm bộ quy tắc chuẩn hóa thuật ngữ cho các miền khác (y tế, sản xuất…).
-- Thay embedding (VD: Sentence Transformers) hoặc fine-tune tương thích tiếng Việt.
+- Đánh giá lại bundle/version embedding bằng golden set trước khi đổi model.
 - Tích hợp giám sát real-time từ API/SCADA và phát hiện bất thường.
 
 ## 11) Giấy phép & liên hệ
@@ -124,4 +129,4 @@ streamlit run hht_rag_system.py --server.fileWatcherType=none
 
 ---
 
-**Ghi chú cuối**: Để có trải nghiệm mượt nhất, **hãy dùng Python 3.11.4**, tạo venv sạch, cài `requirements.txt`, chạy `load_model.py`, sau đó `streamlit run hht_rag_system.py`. Khi cần chế độ online, đặt `OPENAI_API_KEY`; khi offline, đảm bảo **Ollama** đang chạy với model `llama3.2`.
+**Ghi chú cuối**: Dùng Python 3.11.4, tạo venv sạch, cài `requirements.txt`, đặt bundle E5 local đúng cấu trúc rồi chạy `streamlit run hht_rag_system.py`. Embedding không cần mạng; khi dùng LLM offline, đảm bảo **Ollama** đang chạy với model `llama3.2`.

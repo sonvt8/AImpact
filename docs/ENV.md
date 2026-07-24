@@ -15,12 +15,14 @@ API đọc biến môi trường khi `create_app()` được gọi. Đường d�
 | `DATA_DIR` | Không | `data` | Chroma, encryption key và runtime data |
 | `HISTORY_DIR` | Không | `history` | Volume history tương thích |
 | `DOCUMENTS_DIR` | Không | `documents` | Nơi lưu tệp upload |
-| `MODEL_PATH` | Có | `models/cc.vi.300.bin` | FastText model; startup yêu cầu file tồn tại |
+| `MODEL_PATH` | Có | `models/multilingual-e5-small-onnx` | Bundle ONNX E5; startup chấp nhận directory hoặc file FastText rollback tồn tại |
+| `EMBEDDING_MODEL_ID` | Không | `intfloat-multilingual-e5-small-onnx-o4-v1` | ID version hóa để tách collection embedding |
 | `STATS_WORKBOOK` | Có | `project_agent/Phu luc 1.xlsx` | Workbook cho `/api/stats` |
 | `DATABASE_PATH` | Không | `data/app.db` | SQLite ứng dụng |
 | `PROVIDERS_STATE_PATH` | Không | `data/providers.state.json` | Provider/model/threshold runtime |
 | `FRONTEND_DIST` | Không | `web/dist` | Vite build được FastAPI serve |
-| `SIMILARITY_THRESHOLD` | Không | `0.78` | Ngưỡng seed ban đầu; sau đó runtime state giữ giá trị |
+| `SIMILARITY_THRESHOLD` | Không | `0.84` | Ngưỡng seed ban đầu; sau đó runtime state giữ giá trị |
+| `ANONYMIZED_TELEMETRY` | Không | `FALSE` | Tắt telemetry của Chroma |
 | `LLM_TIMEOUT` | Không | `60` | Timeout HTTP tới provider, giây |
 | `MAX_UPLOAD_MB` | Không | `50` | Giới hạn upload mỗi tệp |
 | `NROUTER_API_KEY` | Tùy provider | rỗng | Key 9Router; profile cho phép `not-needed` |
@@ -37,12 +39,14 @@ Các biến sau chỉ được Docker Compose dùng để chọn thư mục bind
 
 | Biến | Mặc định | Vai trò |
 |---|---|---|
-| `AIMPACT_MODELS_DIR` | `./models` | Thư mục host chứa trực tiếp `cc.vi.300.bin`; đặt đường dẫn tuyệt đối nếu model nằm ngoài repo; mount read-only vào `/app/models` |
+| `AIMPACT_MODELS_DIR` | `./models` | Thư mục cha host chứa `multilingual-e5-small-onnx/`; đặt đường dẫn tuyệt đối nếu bundle nằm ngoài repo; mount read-only vào `/app/models` |
 | `AIMPACT_DATA_DIR` | `./data` | SQLite, Chroma, encryption key, provider state và JWT secret DEV; mount writable vào `/app/data` |
 | `AIMPACT_HISTORY_DIR` | `./history` | Dữ liệu history tương thích; mount writable vào `/app/history` |
 | `AIMPACT_DOCUMENTS_DIR` | `./documents` | Tài liệu upload; mount writable vào `/app/documents` |
 
-Nếu `AIMPACT_MODELS_DIR` trỏ đúng thư mục chứa model, không cần đổi `MODEL_PATH`: Compose mount thư mục đó vào `/app/models` và mặc định vẫn là `/app/models/cc.vi.300.bin`.
+Nếu `AIMPACT_MODELS_DIR` trỏ đúng thư mục cha chứa bundle, không cần đổi `MODEL_PATH`: Compose mount thư mục đó vào `/app/models` và mặc định vẫn là `/app/models/multilingual-e5-small-onnx`.
+
+Bundle phải có `manifest.json`, `tokenizer.json` và `onnx/model_O4.onnx`. Runtime dùng trực tiếp `onnxruntime` + `tokenizers`, xác minh SHA-256 theo manifest và không tải mạng. FastText chỉ dùng khi rollback bằng cách trỏ `MODEL_PATH` tới file `.bin` tương ứng.
 
 ## Mạng 9Router
 

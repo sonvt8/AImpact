@@ -44,8 +44,8 @@ def test_add_counts_and_metadata(tmp_path, workbook_records):
             parser_version="test-parser-v1",
         )
 
-        assert result == {"status": "added", "added": 357, "version": 1}
-        assert vector_index.count() == 357
+        assert result == {"status": "added", "added": 127, "version": 1}
+        assert vector_index.count() == 127
         metadata = vector_index.collection.get(
             limit=1,
             include=["metadatas"],
@@ -61,7 +61,11 @@ def test_add_counts_and_metadata(tmp_path, workbook_records):
 
 
 def test_verbatim_roundtrip(tmp_path, workbook_records):
-    original = next(record for record in workbook_records if not record.is_section)
+    original = next(
+        record
+        for record in workbook_records
+        if not record.is_section and not record.sheet_name.startswith("Form ")
+    )
     vector_index = create_index(tmp_path)
     try:
         vector_index.add_records(
@@ -121,7 +125,7 @@ def test_no_allowlist_and_where(tmp_path, workbook_records):
         assert len({item["metadata"]["sheet_name"] for item in unfiltered}) > 1
         similarities = [item["similarity"] for item in unfiltered]
         assert all(0.0 <= similarity <= 1.0 for similarity in similarities)
-        assert similarities == sorted(similarities, reverse=True)
+        assert all(isinstance(item["lexical_gate"], bool) for item in unfiltered)
         assert len(filtered) == 6
         assert all(
             item["metadata"]["sheet_name"] == "3. Ds VHKT"
@@ -133,7 +137,11 @@ def test_no_allowlist_and_where(tmp_path, workbook_records):
 
 
 def test_reindex_on_checksum(tmp_path, workbook_records):
-    records = [record for record in workbook_records if not record.is_section][:3]
+    records = [
+        record
+        for record in workbook_records
+        if not record.is_section and not record.sheet_name.startswith("Form ")
+    ][:3]
     vector_index = create_index(tmp_path)
     try:
         first = vector_index.add_records(
@@ -178,7 +186,11 @@ def test_reindex_on_checksum(tmp_path, workbook_records):
 
 
 def test_embedding_model_guard(tmp_path, workbook_records):
-    record = next(record for record in workbook_records if not record.is_section)
+    record = next(
+        record
+        for record in workbook_records
+        if not record.is_section and not record.sheet_name.startswith("Form ")
+    )
     vector_index = create_index(tmp_path, embedding_model_id="m1")
     vector_index.add_records(
         [record],
@@ -225,6 +237,73 @@ def test_list_filenames_reset_delete(tmp_path, workbook_records):
         assert vector_index.count() == 0
         assert vector_index.list_filenames() == []
         assert vector_index.collection.metadata["hnsw:space"] == "cosine"
+    finally:
+        del vector_index
+        gc.collect()
+
+
+def test_runtime_disables_chroma_telemetry(tmp_path):
+    vector_index = create_index(tmp_path)
+    try:
+        settings = vector_index.client.get_settings()
+
+        assert settings.anonymized_telemetry is False
+        assert settings.chroma_product_telemetry_impl.endswith(
+            ".NoopProductTelemetry"
+        )
+    finally:
+        del vector_index
+        gc.collect()
+
+
+def test_hybrid_alias_reranks_ups_trip_mccb_into_top_five(
+    tmp_path, workbook_records
+):
+    vector_index = create_index(tmp_path)
+    try:
+        vector_index.add_records(
+            workbook_records,
+            filename=WORKBOOK_PATH.name,
+            doc_checksum="hybrid-alias",
+            embed_fn=stub_embed,
+            parser_version="test-parser-v1",
+        )
+
+        hits = vector_index.query(
+            "Nguồn lưu điện đang nuôi tải bằng pin vì đầu cấp bị ngắt",
+            stub_embed,
+            top_k=5,
+        )
+        target = next(
+            hit
+            for hit in hits
+            if hit["metadata"]["locator"] == "2.Ds XLSC!A4:L4"
+        )
+
+        assert target["lexical_gate"] is True
+        assert "UPS không có nguồn vào do trip MCCB" in target["text_verbatim"]
+        assert index._extract_identifiers("ắc quy") == set()
+    finally:
+        del vector_index
+        gc.collect()
+
+
+def test_absent_identifiers_fail_lexical_gate(tmp_path, workbook_records):
+    vector_index = create_index(tmp_path)
+    try:
+        vector_index.add_records(
+            workbook_records,
+            filename=WORKBOOK_PATH.name,
+            doc_checksum="absent-identifiers",
+            embed_fn=stub_embed,
+            parser_version="test-parser-v1",
+        )
+
+        for query in ("N9 mất điện", "ACB99 không đóng", "FM200 chữa cháy"):
+            hits = vector_index.query(query, stub_embed, top_k=5)
+
+            assert hits
+            assert all(hit["lexical_gate"] is False for hit in hits)
     finally:
         del vector_index
         gc.collect()

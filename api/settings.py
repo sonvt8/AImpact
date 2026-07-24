@@ -41,7 +41,10 @@ class Settings:
             data_dir=data_dir,
             history_dir=_path(root, os.getenv("HISTORY_DIR", "history")),
             documents_dir=_path(root, os.getenv("DOCUMENTS_DIR", "documents")),
-            model_path=_path(root, os.getenv("MODEL_PATH", "models/cc.vi.300.bin")),
+            model_path=_path(
+                root,
+                os.getenv("MODEL_PATH", "models/multilingual-e5-small-onnx"),
+            ),
             stats_workbook=_path(
                 root,
                 os.getenv("STATS_WORKBOOK", "project_agent/Phu luc 1.xlsx"),
@@ -58,7 +61,7 @@ class Settings:
             admin_username=os.getenv("ADMIN_USERNAME", ""),
             admin_password=os.getenv("ADMIN_PASSWORD", ""),
             frontend_origin=os.getenv("FRONTEND_ORIGIN", "http://localhost:5173"),
-            similarity_threshold=float(os.getenv("SIMILARITY_THRESHOLD", "0.78")),
+            similarity_threshold=float(os.getenv("SIMILARITY_THRESHOLD", "0.84")),
             llm_timeout=int(os.getenv("LLM_TIMEOUT", "60")),
             max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "50")),
             app_port=int(os.getenv("APP_PORT", "8000")),
@@ -72,7 +75,7 @@ class Settings:
         errors = []
         if len(self.jwt_secret) < 32:
             errors.append("JWT_SECRET must contain at least 32 characters")
-        if not self.model_path.is_file():
+        if not self.model_path.exists():
             errors.append(f"MODEL_PATH does not exist: {self.model_path}")
         if not self.stats_workbook.is_file():
             errors.append(f"STATS_WORKBOOK does not exist: {self.stats_workbook}")

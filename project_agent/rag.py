@@ -2,9 +2,11 @@ NO_EVIDENCE_MESSAGE = "Không tìm thấy thông tin phù hợp trong tài liệ
 
 
 def select_evidence(hits, threshold, max_ctx=5) -> tuple[list[dict], bool]:
-    kept = [hit for hit in hits if hit["similarity"] >= threshold][
-        : max(0, max_ctx)
-    ]
+    kept = [
+        hit
+        for hit in hits
+        if hit["similarity"] >= threshold and hit.get("lexical_gate", True)
+    ][: max(0, max_ctx)]
     return kept, bool(kept)
 
 

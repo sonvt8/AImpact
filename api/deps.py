@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -20,24 +21,38 @@ import stats as core_stats
 import textnorm as core_textnorm
 
 
+def _collection_name(embedding_model_id: str) -> str:
+    digest = hashlib.sha256(embedding_model_id.encode("utf-8")).hexdigest()[:20]
+    return f"viettel-docs-{digest}"
+
+
 @lru_cache(maxsize=4)
 def get_service(settings: Settings):
     core_config.DATA_DIR = str(settings.data_dir)
     core_config.MODEL_PATH = str(settings.model_path)
     core_config.SIMILARITY_THRESHOLD = settings.similarity_threshold
-    embedder = core_embedding.FastTextEmbedder(
-        model_path=str(settings.model_path),
-        preprocess=core_textnorm.normalize,
-    )
+    if settings.model_path.is_dir():
+        embedder = core_embedding.LocalOnnxEmbedder(
+            settings.model_path,
+            max_length=96,
+            batch_size=16,
+        )
+    else:
+        embedder = core_embedding.FastTextEmbedder(
+            model_path=str(settings.model_path),
+            preprocess=core_textnorm.normalize,
+        )
     vector_index = core_index.VectorIndex(
         persist_directory=settings.data_dir / "chroma_db",
         key_path=settings.data_dir / "encryption_key.key",
+        collection_name=_collection_name(core_config.EMBEDDING_MODEL_ID),
         embedding_model_id=core_config.EMBEDDING_MODEL_ID,
     )
     rag_service = core_service.build_service(
         lambda prompt: "",
         embedder=embedder,
         index_obj=vector_index,
+        structured_workbook=settings.stats_workbook,
     )
     rag_service.embedder = embedder
     return rag_service

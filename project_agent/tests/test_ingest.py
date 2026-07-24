@@ -71,6 +71,25 @@ def test_generic_and_no_ffill(tmp_path):
     assert beta.fields["note"] == ""
 
 
+def test_blank_form_is_ignored_but_populated_form_keeps_citation(tmp_path):
+    path = tmp_path / "forms.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Form empty"
+    worksheet = workbook.create_sheet("Form populated")
+    worksheet.append(["Code", "Value", "Note"])
+    worksheet.append(["AC", 6, ""])
+    workbook.save(path)
+    workbook.close()
+
+    records = ingest.parse_file(path)
+
+    assert len(records) == 1
+    assert records[0].sheet_name == "Form populated"
+    assert records[0].locator == "Form populated!A2:C2"
+    assert records[0].text_verbatim == "Code: AC\nValue: 6\nNote: "
+    assert records[0].text_retrieval == "Form populated\nCode: AC\nValue: 6"
+
+
 def test_txt_and_csv(tmp_path):
     txt_path = tmp_path / "sample.txt"
     txt_path.write_bytes("A\r\nB".encode("utf-8"))

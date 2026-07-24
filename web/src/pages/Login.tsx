@@ -1,13 +1,13 @@
 import { FormEvent, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
+import { notify } from '../notify'
 
 export default function Login() {
   const { user, signIn } = useAuth()
   const navigate = useNavigate()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
   if (user) return <Navigate to="/" replace />
@@ -15,12 +15,11 @@ export default function Login() {
   async function submit(event: FormEvent) {
     event.preventDefault()
     setBusy(true)
-    setError('')
     try {
       await signIn(username, password)
       navigate('/')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Đăng nhập thất bại')
+      notify.error('Đăng nhập thất bại', { description: reason instanceof Error ? reason.message : 'Không thể xác thực tài khoản' })
     } finally {
       setBusy(false)
     }
@@ -38,7 +37,6 @@ export default function Login() {
         <form onSubmit={submit} className="login-form" aria-busy={busy}>
           <div className="field"><label htmlFor="username">Tên đăng nhập</label><input id="username" autoFocus autoComplete="username" disabled={busy} value={username} onChange={event => setUsername(event.target.value)} /></div>
           <div className="field"><label htmlFor="password">Mật khẩu</label><input id="password" type="password" autoComplete="current-password" disabled={busy} value={password} onChange={event => setPassword(event.target.value)} /></div>
-          {error && <div className="error-box" role="alert">{error}</div>}
           <button className="button" disabled={busy}>{busy ? 'Đang xác thực…' : 'Đăng nhập'}</button>
         </form>
       </div>

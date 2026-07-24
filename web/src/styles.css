@@ -77,6 +77,18 @@
 
 @layer components {
   .screen-center { @apply grid min-h-screen place-items-center bg-bg text-text-muted; }
+
+  .toast-region { @apply pointer-events-none fixed right-4 top-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2; }
+  .toast { @apply pointer-events-auto grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 rounded-card border border-border bg-surface p-3 text-text shadow-elevation-lg; animation: toast-enter 160ms ease-out; }
+  .toast-accent { @apply mt-1 h-2.5 w-2.5 rounded-full; }
+  .toast-success .toast-accent { @apply bg-success; }
+  .toast-error .toast-accent { @apply bg-danger; }
+  .toast-content { @apply min-w-0; }
+  .toast-title { @apply block text-body font-semibold; }
+  .toast-description { @apply mb-0 mt-1 text-caption text-text-muted; }
+  .toast-close { @apply -mr-1 -mt-1 grid h-7 w-7 place-items-center rounded-control border-0 bg-transparent text-lg leading-none text-text-muted; }
+  .toast-close:hover { @apply bg-instrument text-text; }
+  .toast-close:focus-visible { @apply outline-none ring-2 ring-ring/40; }
   .app-shell { @apply min-h-screen bg-bg; }
 
   .topbar {
@@ -150,9 +162,6 @@
     @apply cursor-not-allowed bg-surface-raised text-text-muted opacity-60;
   }
 
-  .error-box, .notice { @apply rounded-card border px-3.5 py-3 text-body shadow-elevation-sm; }
-  .error-box { @apply border-danger/30 bg-danger/10 text-danger; }
-  .notice { @apply border-primary/25 bg-primary/10 text-primary; }
   .empty-state { @apply px-8 py-9 text-center text-body text-text-muted; }
   .empty-state.compact { @apply px-4 py-5 text-left text-caption text-instrument-muted; }
   .mono { @apply font-mono; }
@@ -232,6 +241,12 @@
   .message.user { @apply border-primary/20 bg-primary/10; }
   .message.no-evidence { @apply border-warning/30 bg-warning/10 text-warning; }
   .message-role { @apply mb-2 font-mono text-micro font-bold text-text-muted; }
+  .message-meta { @apply mb-3 flex flex-wrap items-center gap-1.5; }
+  .route-badge, .source-badge { @apply inline-flex max-w-full truncate rounded-full border px-2 py-0.5 font-mono text-micro font-semibold; }
+  .route-badge[data-route="structured"] { @apply border-primary/25 bg-primary/10 text-primary; }
+  .route-badge[data-route="retrieval"] { @apply border-success/25 bg-success/10 text-success; }
+  .route-badge[data-route="refuse"] { @apply border-warning/30 bg-warning/10 text-warning; }
+  .source-badge { @apply border-instrument-border bg-instrument text-instrument-muted; }
   .typing { @apply italic text-text-muted; }
 
   .composer { @apply mb-4 ml-[max(18px,calc((100%-860px)/2))] mr-[max(18px,calc((100%-860px)/2))] rounded-card border border-border bg-surface shadow-elevation-md; }
@@ -292,6 +307,11 @@
   .user-create { @apply grid grid-cols-[1fr_1fr_140px_auto] gap-2.5 border-b border-border p-gutter; }
   td.actions { @apply flex justify-end gap-1.5; }
   td.actions .button { @apply min-h-0 px-2.5 py-1.5 text-[0.6875rem]; }
+}
+
+@keyframes toast-enter {
+  from { opacity: 0; transform: translateY(-0.5rem); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @media (max-width: 1100px) {

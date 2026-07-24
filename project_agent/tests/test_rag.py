@@ -35,6 +35,20 @@ def test_no_answer_gate():
     ) == (None, [])
 
 
+def test_lexical_gate_is_required_but_defaults_true():
+    blocked = make_hit(1, 0.99)
+    blocked["lexical_gate"] = False
+    compatible = make_hit(2, 0.90)
+
+    kept, has_evidence = rag.select_evidence(
+        [blocked, compatible],
+        threshold=0.5,
+    )
+
+    assert kept == [compatible]
+    assert has_evidence is True
+
+
 def test_evidence_selected_and_capped():
     hits = [make_hit(index, 0.99 - index * 0.01) for index in range(8)]
 

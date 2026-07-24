@@ -3,18 +3,20 @@ import CitationPanel from '../components/CitationPanel'
 import Markdown from '../components/Markdown'
 import { api, authorizedFetch } from '../lib/api'
 import type { Citation, Conversation, Message } from '../lib/types'
+import { notify } from '../notify'
 
 const NO_EVIDENCE = 'Không tìm thấy thông tin phù hợp trong tài liệu.'
+
+type ChatMessage = Message & { route?: 'structured' | 'retrieval' | 'refuse' }
 
 export default function Chat() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [query, setQuery] = useState('')
   const [topK, setTopK] = useState(10)
   const [busy, setBusy] = useState(false)
   const [loadingConversations, setLoadingConversations] = useState(true)
-  const [error, setError] = useState('')
 
   const citations = useMemo<Citation[]>(() => (
     [...messages].reverse().find(message => message.role === 'assistant' && message.citations?.length)?.citations || []
@@ -26,24 +28,32 @@ export default function Chat() {
     finally { setLoadingConversations(false) }
   }
 
-  useEffect(() => { loadConversations().catch(reason => setError(reason.message)) }, [])
+  useEffect(() => { loadConversations().catch(reason => notify.error(reason instanceof Error ? reason.message : 'Không tải được hội thoại')) }, [])
 
   async function openConversation(id: string) {
-    const conversation = await api<Conversation>(`/api/conversations/${id}`)
-    setConversationId(id)
-    setMessages(conversation.messages || [])
+    try {
+      const conversation = await api<Conversation>(`/api/conversations/${id}`)
+      setConversationId(id)
+      setMessages(conversation.messages || [])
+    } catch (reason) {
+      notify.error('Không mở được hội thoại', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' })
+    }
   }
 
   async function newConversation() {
     setConversationId(null)
     setMessages([])
-    setError('')
   }
 
   async function removeConversation(id: string) {
-    await api(`/api/conversations/${id}`, { method: 'DELETE' })
-    if (conversationId === id) await newConversation()
-    await loadConversations()
+    try {
+      await api(`/api/conversations/${id}`, { method: 'DELETE' })
+      if (conversationId === id) await newConversation()
+      await loadConversations()
+      notify.success('Đã xóa hội thoại')
+    } catch (reason) {
+      notify.error('Không thể xóa hội thoại', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' })
+    }
   }
 
   async function submit(event: FormEvent) {
@@ -51,7 +61,6 @@ export default function Chat() {
     const question = query.trim()
     if (!question || busy) return
     setBusy(true)
-    setError('')
     setQuery('')
     try {
       let activeId = conversationId
@@ -85,11 +94,15 @@ export default function Chat() {
           const line = block.split('\n').find(item => item.startsWith('data:'))
           if (!line) continue
           const event = JSON.parse(line.slice(5).trim())
+          if (event.type === 'error') {
+            notify.error('Truy vấn thất bại', { description: event.detail || 'Không thể hoàn tất câu trả lời' })
+            setMessages(previous => previous.slice(0, -1))
+            continue
+          }
           setMessages(previous => previous.map((message, index) => {
             if (index !== previous.length - 1) return message
             if (event.type === 'token') return { ...message, content: message.content + event.text }
-            if (event.type === 'final') return { ...message, content: event.text || message.content, citations: event.citations || [] }
-            if (event.type === 'error') return { ...message, content: event.detail }
+            if (event.type === 'final') return { ...message, content: event.text || message.content, citations: event.citations || [], route: event.route }
             return message
           }))
         }
@@ -97,7 +110,11 @@ export default function Chat() {
       }
       await loadConversations()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Truy vấn thất bại')
+      setMessages(previous => {
+        const last = previous[previous.length - 1]
+        return last?.role === 'assistant' && !last.content ? previous.slice(0, -1) : previous
+      })
+      notify.error('Truy vấn thất bại', { description: reason instanceof Error ? reason.message : 'Không thể gửi truy vấn' })
     } finally {
       setBusy(false)
     }
@@ -130,10 +147,19 @@ export default function Chat() {
           {messages.map((message, index) => (
             <article className={`message ${message.role} ${message.content === NO_EVIDENCE ? 'no-evidence' : ''}`} key={message.id || index}>
               <div className="message-role">{message.role === 'user' ? 'BẠN' : 'AIMPACT'}</div>
+              {message.role === 'assistant' && (message.route || message.citations?.length) ? (
+                <div className="message-meta">
+                  {message.route && <span className="route-badge" data-route={message.route} aria-label={`Tuyến xử lý: ${message.route}`}>{message.route}</span>}
+                  {message.citations?.map((citation, citationIndex) => (
+                    <span className="source-badge" key={`${citation.filename}:${citation.locator}:${citationIndex}`} title={`${citation.filename} · ${citation.locator}`}>
+                      Nguồn {citationIndex + 1} · {citation.filename} · {citation.locator}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               {message.content ? <Markdown text={message.content} /> : <span className="typing" role="status">Đang tổng hợp từ bằng chứng…</span>}
             </article>
           ))}
-          {error && <div className="error-box" role="alert">{error}</div>}
         </div>
         <form className="composer" onSubmit={submit}>
           <textarea aria-label="Câu hỏi" rows={2} placeholder="Ví dụ: Khi mất một lộ điện lưới tại N6 cần xử lý thế nào?" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => {

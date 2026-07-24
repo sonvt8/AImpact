@@ -1,20 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
+import { notify } from '../notify'
 
 type StatsResult = { sheet: string; rows: Record<string, unknown>[]; totals: Record<string, number> }
 
 export default function Stats() {
   const [sheet, setSheet] = useState('Tong hop')
   const [data, setData] = useState<StatsResult | null>(null)
-  const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const columns = useMemo(() => data?.rows[0] ? Object.keys(data.rows[0]) : [], [data])
 
   async function load() {
     setLoading(true)
-    setError('')
     try { setData(await api<StatsResult>(`/api/stats?sheet=${encodeURIComponent(sheet)}`)) }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Không đọc được thống kê') }
+    catch (reason) { notify.error('Không đọc được thống kê', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' }) }
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -25,7 +24,6 @@ export default function Stats() {
         <div><h1>Thống kê sự cố</h1><p>Tính trực tiếp từ bảng tính, không qua LLM.</p></div>
         <div className="sheet-picker"><input aria-label="Tên sheet" disabled={loading} value={sheet} onChange={event => setSheet(event.target.value)} /><button className="button secondary" disabled={loading} onClick={load}>{loading ? 'Đang đọc…' : 'Đọc sheet'}</button></div>
       </div>
-      {error && <div className="error-box" role="alert">{error}</div>}
       {loading && !data && <div className="panel empty-state" role="status">Đang tải thống kê…</div>}
       {data && <>
         <div className="metric-grid">

@@ -1,10 +1,9 @@
 import { ChangeEvent, DragEvent, useEffect, useState } from 'react'
 import { api } from '../lib/api'
+import { notify } from '../notify'
 
 export default function Documents() {
   const [documents, setDocuments] = useState<string[]>([])
-  const [status, setStatus] = useState('')
-  const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
 
@@ -13,29 +12,32 @@ export default function Documents() {
     try { setDocuments(await api<string[]>('/api/documents')) }
     finally { setLoading(false) }
   }
-  useEffect(() => { load().catch(reason => setError(reason.message)) }, [])
+  useEffect(() => { load().catch(reason => notify.error(reason instanceof Error ? reason.message : 'Không tải được danh sách tài liệu')) }, [])
 
   async function upload(file?: File) {
     if (!file) return
     setBusy(true)
-    setError('')
-    setStatus('')
     const body = new FormData()
     body.append('file', file)
     try {
       const result = await api<{ status: string; added: number }>('/api/documents', { method: 'POST', body })
-      setStatus(`${file.name}: ${result.status}, thêm ${result.added} bản ghi.`)
+      notify.success(`Đã ingest ${file.name}`, { description: `${result.status}, thêm ${result.added} bản ghi.` })
       await load()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Upload thất bại')
+      notify.error('Không thể ingest tài liệu', { description: reason instanceof Error ? reason.message : 'Upload thất bại' })
     } finally {
       setBusy(false)
     }
   }
 
   async function remove(filename: string) {
-    await api(`/api/documents/${encodeURIComponent(filename)}`, { method: 'DELETE' })
-    await load()
+    try {
+      await api(`/api/documents/${encodeURIComponent(filename)}`, { method: 'DELETE' })
+      await load()
+      notify.success(`Đã xóa ${filename}`)
+    } catch (reason) {
+      notify.error('Không thể xóa tài liệu', { description: reason instanceof Error ? reason.message : 'Xóa tài liệu thất bại' })
+    }
   }
 
   function drop(event: DragEvent) {
@@ -54,8 +56,6 @@ export default function Documents() {
         </label>
         <section className="panel" aria-busy={loading}>
           <div className="panel-title"><b>Tài liệu đã lập chỉ mục</b><span>{documents.length} tệp</span></div>
-          {status && <div className="notice" role="status">{status}</div>}
-          {error && <div className="error-box" role="alert">{error}</div>}
           {loading && !documents.length ? <div className="empty-state" role="status">Đang tải tài liệu…</div> : !documents.length ? <div className="empty-state">Chưa có tài liệu trong chỉ mục.</div> : (
             <div className="document-list">
               {documents.map(filename => <div key={filename}><span className="mono">{filename}</span><button className="button danger" onClick={() => remove(filename)}>Xóa</button></div>)}

@@ -19,6 +19,22 @@ class Record:
     stt: object | None
     is_section: bool
 
+    @property
+    def text_retrieval(self) -> str:
+        field_lines = [
+            f"{header}: {str(value).strip()}"
+            for header, value in self.fields.items()
+            if value is not None and str(value).strip()
+        ]
+        if not field_lines:
+            return self.text_verbatim
+        return "\n".join(
+            [
+                *(item.strip() for item in [self.sheet_name, *self.section_path] if item and item.strip()),
+                *field_lines,
+            ]
+        )
+
 
 def parse_file(path) -> list[Record]:
     extension = str(path).lower().rsplit(".", 1)[-1]

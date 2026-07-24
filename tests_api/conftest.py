@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from api.deps import core_service
 from api.main import create_app
 from api.settings import Settings
 
@@ -17,10 +18,18 @@ WORKBOOK = Path(__file__).resolve().parents[1] / "project_agent" / "Phu luc 1.xl
 class FakeIndex:
     def __init__(self):
         self.hits = []
+        self.records = []
         self.filenames = ["Phu luc 1.xlsx"]
+        self.query_calls = 0
+        self.query_embed_fns = []
 
     def query(self, query, embed_fn, top_k=10, where=None):
+        self.query_calls += 1
+        self.query_embed_fns.append(embed_fn)
         return self.hits[:top_k]
+
+    def all_records(self):
+        return self.records
 
     def list_filenames(self):
         return list(self.filenames)
@@ -33,16 +42,25 @@ class FakeIndex:
         return len(self.hits)
 
 
-class FakeService:
-    def __init__(self):
-        self.index_obj = FakeIndex()
-        self.embed_fn = lambda texts: [[1.0] for _ in texts]
+class FakeService(core_service.RagService):
+    def __init__(self, structured_workbook):
+        self.embed_calls = 0
+        super().__init__(
+            self._embed,
+            FakeIndex(),
+            lambda prompt: "",
+            structured_workbook=structured_workbook,
+        )
         self.embedder = type("Embedder", (), {"_model": object()})()
+
+    def _embed(self, texts):
+        self.embed_calls += 1
+        return [[1.0] for _ in texts]
 
     def ingest_path(self, path, filename):
         if filename not in self.index_obj.filenames:
             self.index_obj.filenames.append(filename)
-        return {"status": "added", "added": 357}
+        return {"status": "added", "added": 127}
 
 
 @dataclass
@@ -79,7 +97,7 @@ def settings(tmp_path):
         admin_username="admin",
         admin_password="admin-password-strong",
         frontend_origin="http://testserver",
-        similarity_threshold=0.78,
+        similarity_threshold=0.84,
         llm_timeout=3,
         max_upload_mb=50,
         app_port=8000,
@@ -89,7 +107,7 @@ def settings(tmp_path):
 @pytest.fixture
 def api_client(settings):
     app = create_app(settings)
-    service = FakeService()
+    service = FakeService(settings.stats_workbook)
     llm = FakeLLM()
     app.state.service_getter = lambda: service
     app.state.llm = llm

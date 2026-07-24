@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type { Provider, Role } from '../lib/types'
+import { notify } from '../notify'
 
 type UserRow = { id: number; username: string; role: Role; created_at: string }
 type AuditRow = { id: number; username: string; action: string; resource_id?: string; timestamp: string }
@@ -14,7 +15,6 @@ export default function Admin() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<Role>('user')
-  const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadingModels, setLoadingModels] = useState<string | null>(null)
 
@@ -28,59 +28,79 @@ export default function Admin() {
       setProviders(providerRows); setUsers(userRows); setThreshold(thresholdResult.threshold); setAudit(auditRows)
     } finally { setLoading(false) }
   }
-  useEffect(() => { load().catch(reason => setError(reason.message)) }, [])
+  useEffect(() => { load().catch(reason => notify.error(reason instanceof Error ? reason.message : 'Không tải được trang quản trị')) }, [])
 
   async function activate(id: string) {
-    await api('/api/providers/active', { method: 'POST', body: JSON.stringify({ id }) })
-    await load()
+    try {
+      await api('/api/providers/active', { method: 'POST', body: JSON.stringify({ id }) })
+      await load()
+      notify.success('Đã kích hoạt provider')
+    } catch (reason) { notify.error('Không thể kích hoạt provider', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' }) }
   }
 
   async function loadModels(id: string) {
     setLoadingModels(id)
-    setError('')
     try {
       const result = await api<{ models: string[] }>(`/api/providers/${id}/models`)
       setModels(previous => ({ ...previous, [id]: result.models }))
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Không tải được model') }
+      notify.success(`Đã tải ${result.models.length} model`)
+    } catch (reason) { notify.error('Không tải được model', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' }) }
     finally { setLoadingModels(null) }
   }
 
   async function setModel(id: string, model: string) {
-    await api(`/api/providers/${id}/model`, { method: 'POST', body: JSON.stringify({ model }) })
-    await load()
+    try {
+      await api(`/api/providers/${id}/model`, { method: 'POST', body: JSON.stringify({ model }) })
+      await load()
+      notify.success(`Đã chọn model ${model}`)
+    } catch (reason) { notify.error('Không thể đổi model', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' }) }
   }
 
   async function saveThreshold() {
-    await api('/api/settings/threshold', { method: 'POST', body: JSON.stringify({ threshold }) })
+    try {
+      await api('/api/settings/threshold', { method: 'POST', body: JSON.stringify({ threshold }) })
+      notify.success('Đã lưu ngưỡng bằng chứng')
+    } catch (reason) { notify.error('Không thể lưu ngưỡng', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' }) }
   }
 
   async function createUser(event: FormEvent) {
     event.preventDefault()
-    await api('/api/users', { method: 'POST', body: JSON.stringify({ username, password, role }) })
-    setUsername(''); setPassword(''); await load()
+    try {
+      await api('/api/users', { method: 'POST', body: JSON.stringify({ username, password, role }) })
+      setUsername(''); setPassword(''); await load()
+      notify.success('Đã tạo người dùng')
+    } catch (reason) { notify.error('Không thể tạo người dùng', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' }) }
   }
 
   async function changeRole(user: UserRow, nextRole: Role) {
-    await api(`/api/users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ role: nextRole }) })
-    await load()
+    try {
+      await api(`/api/users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ role: nextRole }) })
+      await load()
+      notify.success(`Đã đổi vai trò của ${user.username}`)
+    } catch (reason) { notify.error('Không thể đổi vai trò', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' }) }
   }
 
   async function resetPassword(user: UserRow) {
     const next = window.prompt(`Mật khẩu mới cho ${user.username} (ít nhất 10 ký tự)`)
     if (!next) return
-    await api(`/api/users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ password: next }) })
-    await load()
+    try {
+      await api(`/api/users/${user.id}`, { method: 'PATCH', body: JSON.stringify({ password: next }) })
+      await load()
+      notify.success(`Đã đổi mật khẩu cho ${user.username}`)
+    } catch (reason) { notify.error('Không thể đổi mật khẩu', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' }) }
   }
 
   async function removeUser(user: UserRow) {
-    await api(`/api/users/${user.id}`, { method: 'DELETE' })
-    await load()
+    try {
+      await api(`/api/users/${user.id}`, { method: 'DELETE' })
+      await load()
+      notify.success(`Đã xóa ${user.username}`)
+    } catch (reason) { notify.error('Không thể xóa người dùng', { description: reason instanceof Error ? reason.message : 'Yêu cầu thất bại' }) }
   }
 
   return (
     <div className="page admin-page" aria-busy={loading}>
       <div className="page-heading"><div><h1>Quản trị</h1><p>Provider, ngưỡng bằng chứng, người dùng và audit không chứa nội dung nhạy cảm.</p></div></div>
-      {error && <div className="error-box" role="alert">{error}</div>}
       <section className="panel admin-section">
         <div className="panel-title"><b>LLM runtime</b><span>Key chỉ đọc từ biến môi trường</span></div>
         <div className="provider-grid" aria-busy={loading}>{loading && !providers.length ? <div className="empty-state col-span-full" role="status">Đang tải cấu hình runtime…</div> : !providers.length ? <div className="empty-state col-span-full">Chưa có provider.</div> : providers.map(provider => (
