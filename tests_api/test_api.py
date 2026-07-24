@@ -3,12 +3,14 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+from unittest.mock import Mock
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 import api.providers as provider_module
+from api.llm import LLMError
 from api.deps import (
     _collection_name,
     core_embedding,
@@ -73,6 +75,7 @@ def test_conversations_are_private(api_client):
 
 def test_query_gate_never_calls_llm_without_evidence(api_client):
     client, _, service, llm = api_client
+    llm.stream = Mock(side_effect=AssertionError("LLM stream must not be called"))
     tokens = login(client)
     conversation = client.post(
         "/api/conversations", headers=auth(tokens["access_token"]), json={}
@@ -88,13 +91,17 @@ def test_query_gate_never_calls_llm_without_evidence(api_client):
         json={"query": "bí mật-câu-hỏi", "conversation_id": conversation["id"]},
     )
     events = parse_sse(response.text)
-    assert events == [{
-        "type": "final",
-        "text": "Không tìm thấy thông tin phù hợp trong tài liệu.",
-        "citations": [],
-        "route": "refuse",
-    }]
-    assert llm.calls == []
+    assert events == [
+        {"type": "stage", "stage": "retrieval", "label": "Đang truy hồi bằng chứng"},
+        {"type": "stage", "stage": "gate", "label": "Đang kiểm chứng ngưỡng"},
+        {
+            "type": "final",
+            "text": "Không tìm thấy thông tin phù hợp trong tài liệu.",
+            "citations": [],
+            "route": "refuse",
+        },
+    ]
+    llm.stream.assert_not_called()
     assert service.index_obj.query_calls == 1
     assert service.index_obj.query_embed_fns == [service.query_embed_fn]
 
@@ -117,6 +124,12 @@ def test_query_stream_has_locator_and_verbatim(api_client):
         json={"query": "Hướng xử lý sự cố ACB 2000A từ ATS3 cấp lên tại N6", "threshold": 0.78},
     )
     events = parse_sse(response.text)
+    assert [event["stage"] for event in events if event["type"] == "stage"] == [
+        "retrieval",
+        "gate",
+        "generation",
+    ]
+    assert events[3]["type"] == "token"
     final = events[-1]
     assert final["type"] == "final"
     assert final["route"] == "retrieval"
@@ -163,6 +176,7 @@ def test_keyword_overlap_without_gated_evidence_refuses(api_client):
 
 def test_structured_query_and_refusal_skip_retrieval_and_llm(api_client):
     client, _, service, llm = api_client
+    llm.stream = Mock(side_effect=AssertionError("LLM stream must not be called"))
     tokens = login(client)
 
     response = client.post(
@@ -170,7 +184,13 @@ def test_structured_query_and_refusal_skip_retrieval_and_llm(api_client):
         headers=auth(tokens["access_token"]),
         json={"query": "Có bao nhiêu sự cố AC trong vhkt?"},
     )
-    final = parse_sse(response.text)[-1]
+    events = parse_sse(response.text)
+    assert events[0] == {
+        "type": "stage",
+        "stage": "structured",
+        "label": "Đang tra bảng số liệu",
+    }
+    final = events[-1]
     assert final == {
         "type": "final",
         "text": "6",
@@ -190,13 +210,41 @@ def test_structured_query_and_refusal_skip_retrieval_and_llm(api_client):
         headers=auth(tokens["access_token"]),
         json={"query": "Có bao nhiêu sự cố AC?"},
     )
-    final = parse_sse(response.text)[-1]
+    events = parse_sse(response.text)
+    assert events[0]["stage"] == "structured"
+    final = events[-1]
     assert final["route"] == "refuse"
     assert final["text"] == "Không tìm thấy thông tin phù hợp trong tài liệu."
     assert final["citations"] == []
     assert service.index_obj.query_calls == 0
     assert service.embed_calls == 0
-    assert llm.calls == []
+    llm.stream.assert_not_called()
+
+
+def test_query_llm_error_keeps_legacy_error_schema(api_client):
+    client, _, service, llm = api_client
+    tokens = login(client)
+    service.index_obj.hits = [{
+        "text_verbatim": "bằng chứng",
+        "metadata": {"filename": "x.xlsx", "sheet_name": "S", "locator": "S!A1"},
+        "similarity": 0.99,
+    }]
+
+    async def fail_stream(prompt):
+        if False:
+            yield prompt
+        raise LLMError("offline")
+
+    llm.stream = fail_stream
+    response = client.post(
+        "/api/query",
+        headers=auth(tokens["access_token"]),
+        json={"query": "câu hỏi kỹ thuật"},
+    )
+    events = parse_sse(response.text)
+
+    assert [event["stage"] for event in events[:-1]] == ["retrieval", "gate", "generation"]
+    assert events[-1] == {"type": "error", "detail": "Active LLM provider is unavailable"}
 
 
 class FakeModel:

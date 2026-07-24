@@ -24,7 +24,15 @@ export default function Stats() {
         <div><h1>Thống kê sự cố</h1><p>Tính trực tiếp từ bảng tính, không qua LLM.</p></div>
         <div className="sheet-picker"><input aria-label="Tên sheet" disabled={loading} value={sheet} onChange={event => setSheet(event.target.value)} /><button className="button secondary" disabled={loading} onClick={load}>{loading ? 'Đang đọc…' : 'Đọc sheet'}</button></div>
       </div>
-      {loading && !data && <div className="panel empty-state" role="status">Đang tải thống kê…</div>}
+      {loading && !data && <div role="status" aria-label="Đang tải thống kê">
+        <span className="sr-only">Đang tải thống kê…</span>
+        <div className="metric-grid" aria-hidden="true">
+          {[0, 1, 2, 3].map(item => <div className="metric skeleton skeleton-metric" key={item} />)}
+        </div>
+        <div className="panel skeleton-table" aria-hidden="true">
+          {[0, 1, 2, 3, 4].map(item => <div className="skeleton skeleton-line" key={item} />)}
+        </div>
+      </div>}
       {data && <>
         <div className="metric-grid">
           {Object.entries(data.totals).map(([label, value]) => <div className="metric" key={label}><span>{label}</span><b>{value}</b></div>)}
@@ -32,7 +40,13 @@ export default function Stats() {
         {data.rows.length ? <div className="panel table-wrap">
           <table><thead><tr>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
           <tbody>{data.rows.map((row, index) => <tr key={index}>{columns.map(column => <td key={column}>{String(row[column] ?? '—')}</td>)}</tr>)}</tbody></table>
-        </div> : <div className="panel empty-state">Sheet không có dữ liệu.</div>}
+        </div> : <div className="panel empty-state empty-state-rich">
+          <svg className="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 19V9M10 19V5M16 19v-7M22 19H2" />
+          </svg>
+          <strong className="empty-state-title">Sheet chưa có dữ liệu</strong>
+          <p className="empty-state-guidance">Nhập tên sheet có dữ liệu rồi chọn “Đọc sheet”.</p>
+        </div>}
       </>}
     </div>
   )

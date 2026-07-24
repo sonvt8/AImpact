@@ -1,4 +1,5 @@
 import { ChangeEvent, DragEvent, useEffect, useState } from 'react'
+import ConfirmDialog from '../components/ConfirmDialog'
 import { api } from '../lib/api'
 import { notify } from '../notify'
 
@@ -6,6 +7,7 @@ export default function Documents() {
   const [documents, setDocuments] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [pendingFilename, setPendingFilename] = useState<string | null>(null)
 
   async function load() {
     setLoading(true)
@@ -45,6 +47,12 @@ export default function Documents() {
     upload(event.dataTransfer.files[0])
   }
 
+  function confirmRemove() {
+    const filename = pendingFilename
+    setPendingFilename(null)
+    if (filename) void remove(filename)
+  }
+
   return (
     <div className="page">
       <div className="page-heading"><div><h1>Kho tài liệu</h1><p>Ingest dùng trực tiếp pipeline parser đã hardened của lõi RAG.</p></div></div>
@@ -56,13 +64,18 @@ export default function Documents() {
         </label>
         <section className="panel" aria-busy={loading}>
           <div className="panel-title"><b>Tài liệu đã lập chỉ mục</b><span>{documents.length} tệp</span></div>
-          {loading && !documents.length ? <div className="empty-state" role="status">Đang tải tài liệu…</div> : !documents.length ? <div className="empty-state">Chưa có tài liệu trong chỉ mục.</div> : (
+          {loading && !documents.length ? <div className="document-list skeleton-list" role="status" aria-label="Đang tải tài liệu">{[0, 1, 2].map(row => <div className="skeleton-row" aria-hidden="true" key={row}><span className="skeleton skeleton-text" /><span className="skeleton skeleton-action" /></div>)}</div> : !documents.length ? <div className="empty-state empty-state-rich">
+            <svg className="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8m-6-6 6 6m-6-6v6h6M8 13h8m-8 4h5" /></svg>
+            <b className="empty-state-title">Chưa có tài liệu</b>
+            <span className="empty-state-guidance">Kéo thả tệp XLSX, PDF, DOCX, TXT hoặc CSV để bắt đầu lập chỉ mục.</span>
+          </div> : (
             <div className="document-list">
-              {documents.map(filename => <div key={filename}><span className="mono">{filename}</span><button className="button danger" onClick={() => remove(filename)}>Xóa</button></div>)}
+              {documents.map(filename => <div key={filename}><span className="mono">{filename}</span><button className="button danger" onClick={() => setPendingFilename(filename)}>Xóa</button></div>)}
             </div>
           )}
         </section>
       </div>
+      <ConfirmDialog open={pendingFilename !== null} title="Xóa tài liệu?" description={`Tài liệu “${pendingFilename ?? ''}” sẽ bị xóa khỏi chỉ mục. Hành động này không thể hoàn tác.`} onCancel={() => setPendingFilename(null)} onConfirm={confirmRemove} />
     </div>
   )
 }

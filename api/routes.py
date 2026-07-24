@@ -178,31 +178,15 @@ async def query(payload: QueryRequest, request: Request, user: dict = Depends(al
 
     rag_service = request.app.state.service_getter()
     routed = await asyncio.to_thread(rag_service.route, payload.query)
-    if routed is None:
-        hits = await asyncio.to_thread(
-            rag_service.index_obj.query,
-            payload.query,
-            rag_service.query_embed_fn,
-            payload.top_k,
-        )
-        threshold = payload.threshold if payload.threshold is not None else request.app.state.providers.threshold()
-        prompt, citations = request.app.state.rag.answer_or_refuse(
-            payload.query,
-            hits,
-            threshold,
-            history,
-            "Trợ lý kỹ thuật",
-        )
-    else:
-        prompt = None
-        citations = routed["citations"]
     if payload.conversation_id:
         request.app.state.db.add_message(payload.conversation_id, "user", payload.query)
     request.app.state.db.add_audit(user, "query", payload.conversation_id)
 
     async def events():
         if routed is not None:
+            yield _sse("stage", stage="structured", label="Đang tra bảng số liệu")
             answer = str(routed["answer"])
+            citations = routed["citations"]
             if payload.conversation_id:
                 request.app.state.db.add_message(
                     payload.conversation_id,
@@ -218,6 +202,22 @@ async def query(payload: QueryRequest, request: Request, user: dict = Depends(al
             )
             return
 
+        yield _sse("stage", stage="retrieval", label="Đang truy hồi bằng chứng")
+        hits = await asyncio.to_thread(
+            rag_service.index_obj.query,
+            payload.query,
+            rag_service.query_embed_fn,
+            payload.top_k,
+        )
+        yield _sse("stage", stage="gate", label="Đang kiểm chứng ngưỡng")
+        threshold = payload.threshold if payload.threshold is not None else request.app.state.providers.threshold()
+        prompt, citations = request.app.state.rag.answer_or_refuse(
+            payload.query,
+            hits,
+            threshold,
+            history,
+            "Trợ lý kỹ thuật",
+        )
         if prompt is None:
             answer = request.app.state.rag.NO_EVIDENCE_MESSAGE
             if payload.conversation_id:
@@ -225,6 +225,7 @@ async def query(payload: QueryRequest, request: Request, user: dict = Depends(al
             yield _sse("final", text=answer, citations=[], route="refuse")
             return
 
+        yield _sse("stage", stage="generation", label="Đang soạn câu trả lời")
         answer_parts = []
         try:
             async for token in request.app.state.llm.stream(prompt):

@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { Navigate, NavLink, Outlet, Route, Routes } from 'react-router-dom'
 import { useAuth } from './lib/auth'
 import type { Role } from './lib/types'
+import LoadingOverlay from './components/LoadingOverlay'
 import ThemeToggle from './components/ThemeToggle'
 
 const Login = lazy(() => import('./pages/Login'))
@@ -12,7 +13,7 @@ const Admin = lazy(() => import('./pages/Admin'))
 
 function Protected({ role }: { role?: Role }) {
   const { user, loading } = useAuth()
-  if (loading) return <div className="screen-center" role="status">Đang khôi phục phiên…</div>
+  if (loading) return <LoadingOverlay label="Đang khôi phục phiên" />
   if (!user) return <Navigate to="/login" replace />
   if (role && user.role !== role) return <Navigate to="/" replace />
   return <Outlet />
@@ -46,7 +47,7 @@ function Layout() {
 
 export default function App() {
   return (
-    <Suspense fallback={<div className="screen-center" role="status">Đang tải…</div>}>
+    <Suspense fallback={<LoadingOverlay label="Đang tải trang" />}>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route element={<Protected />}>

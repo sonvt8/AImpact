@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import CitationPanel from '../components/CitationPanel'
+import ConfirmDialog from '../components/ConfirmDialog'
 import Markdown from '../components/Markdown'
 import { api, authorizedFetch } from '../lib/api'
 import type { Citation, Conversation, Message } from '../lib/types'
@@ -7,7 +8,7 @@ import { notify } from '../notify'
 
 const NO_EVIDENCE = 'Không tìm thấy thông tin phù hợp trong tài liệu.'
 
-type ChatMessage = Message & { route?: 'structured' | 'retrieval' | 'refuse' }
+type ChatMessage = Message & { route?: 'structured' | 'retrieval' | 'refuse', stageLabel?: string }
 
 export default function Chat() {
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -17,6 +18,7 @@ export default function Chat() {
   const [topK, setTopK] = useState(10)
   const [busy, setBusy] = useState(false)
   const [loadingConversations, setLoadingConversations] = useState(true)
+  const [pendingConversation, setPendingConversation] = useState<Conversation | null>(null)
 
   const citations = useMemo<Citation[]>(() => (
     [...messages].reverse().find(message => message.role === 'assistant' && message.citations?.length)?.citations || []
@@ -72,7 +74,7 @@ export default function Chat() {
         activeId = created.id
         setConversationId(activeId)
       }
-      setMessages(previous => [...previous, { role: 'user', content: question }, { role: 'assistant', content: '', citations: [] }])
+      setMessages(previous => [...previous, { role: 'user', content: question }, { role: 'assistant', content: '', citations: [], stageLabel: 'Đang chuẩn bị truy vấn' }])
       const response = await authorizedFetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -101,6 +103,7 @@ export default function Chat() {
           }
           setMessages(previous => previous.map((message, index) => {
             if (index !== previous.length - 1) return message
+            if (event.type === 'stage') return { ...message, stageLabel: event.label || message.stageLabel }
             if (event.type === 'token') return { ...message, content: message.content + event.text }
             if (event.type === 'final') return { ...message, content: event.text || message.content, citations: event.citations || [], route: event.route }
             return message
@@ -126,10 +129,19 @@ export default function Chat() {
         <button className="button new-chat" onClick={newConversation}>＋ Hội thoại mới</button>
         <div className="conversation-label">HỘI THOẠI CỦA BẠN</div>
         <div className="conversation-list" aria-busy={loadingConversations}>
-          {loadingConversations && !conversations.length ? <div className="conversation-empty" role="status">Đang tải hội thoại…</div> : !conversations.length ? <div className="conversation-empty">Chưa có hội thoại.</div> : conversations.map(conversation => (
+          {loadingConversations && !conversations.length ? <div className="conversation-empty" role="status">Đang tải hội thoại…</div> : !conversations.length ? (
+            <div className="conversation-empty empty-state-rich compact">
+              <svg className="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+                <path d="M7 18.5 3.5 21v-5A8.5 8.5 0 1 1 7 18.5Z" />
+                <path d="M8 9h8M8 13h5" />
+              </svg>
+              <strong className="empty-state-title">Chưa có hội thoại</strong>
+              <p className="empty-state-guidance">Chọn “Hội thoại mới” để bắt đầu tra cứu tài liệu.</p>
+            </div>
+          ) : conversations.map(conversation => (
             <div className={`conversation-item ${conversation.id === conversationId ? 'active' : ''}`} key={conversation.id}>
-              <button onClick={() => openConversation(conversation.id)}>{conversation.title}</button>
-              <button className="delete-mini" aria-label={`Xóa ${conversation.title}`} onClick={() => removeConversation(conversation.id)}>×</button>
+              <button type="button" onClick={() => openConversation(conversation.id)}>{conversation.title}</button>
+              <button type="button" className="delete-mini" aria-label={`Xóa ${conversation.title}`} onClick={() => setPendingConversation(conversation)}>×</button>
             </div>
           ))}
         </div>
@@ -138,10 +150,14 @@ export default function Chat() {
         <div className="chat-status"><span className="status-dot" /><b>Evidence gate hoạt động</b><span>Ngưỡng quyết định do quản trị viên cấu hình</span></div>
         <div className="message-list">
           {!messages.length && (
-            <div className="chat-empty">
+            <div className="chat-empty empty-state-rich">
+              <svg className="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                <path d="M14.5 4.5a6 6 0 1 0 0 12 6 6 0 0 0 0-12Z" />
+                <path d="m19 19-2.8-2.8M5 5v4M3 7h4" />
+              </svg>
               <span className="eyebrow">TRA CỨU CÓ KIỂM CHỨNG</span>
-              <h1>Hỏi tài liệu vận hành</h1>
-              <p>Đặt câu hỏi cụ thể. Hệ thống sẽ từ chối trả lời nếu không tìm thấy bằng chứng đạt ngưỡng.</p>
+              <h1 className="empty-state-title">Hỏi tài liệu vận hành</h1>
+              <p className="empty-state-guidance">Đặt câu hỏi cụ thể; hệ thống chỉ trả lời khi tìm thấy bằng chứng đạt ngưỡng.</p>
             </div>
           )}
           {messages.map((message, index) => (
@@ -157,7 +173,12 @@ export default function Chat() {
                   ))}
                 </div>
               ) : null}
-              {message.content ? <Markdown text={message.content} /> : <span className="typing" role="status">Đang tổng hợp từ bằng chứng…</span>}
+              {message.content ? <Markdown text={message.content} /> : (
+                <span className="stage-indicator" role="status" aria-live="polite">
+                  <span className="stage-spinner" aria-hidden="true" />
+                  <span className="stage-label" key={message.stageLabel}>{message.stageLabel || 'Đang xử lý yêu cầu'}</span>
+                </span>
+              )}
             </article>
           ))}
         </div>
@@ -173,6 +194,18 @@ export default function Chat() {
         </form>
       </section>
       <CitationPanel citations={citations} />
+      <ConfirmDialog
+        open={Boolean(pendingConversation)}
+        title="Xóa hội thoại?"
+        description={pendingConversation ? `Hội thoại “${pendingConversation.title}” sẽ bị xóa vĩnh viễn.` : ''}
+        onCancel={() => setPendingConversation(null)}
+        onConfirm={() => {
+          if (!pendingConversation) return
+          const { id } = pendingConversation
+          setPendingConversation(null)
+          void removeConversation(id)
+        }}
+      />
     </div>
   )
 }
